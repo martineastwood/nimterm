@@ -1,6 +1,6 @@
 import std/[json, strutils, unittest]
 import nimterm/[ansi, app, backend, canvas, events, geometry, markdown, keys,
-  theme, transcript, widget, widgets]
+  style, theme, transcript, widget, widgets]
 when not defined(windows):
   import nimterm/platform_posix
 
@@ -83,6 +83,21 @@ suite "core canvas and app":
     discard menu.handle(UiEvent(kind: uiKey, key: keyEnter))
     check selected == 1
 
+  test "menu keeps the selected row inside a bounded popup":
+    var items: seq[MenuItem]
+    for i in 0 ..< 10:
+      items.add MenuItem(label: "item-" & $i, description: "description")
+    let menu = newMenu(items, bordered = true)
+    var canvas = newCanvas(size(30, 5))
+    menu.render(canvas, rect(0, 0, 30, 5))
+    for _ in 0 ..< 8:
+      discard menu.handle(UiEvent(kind: uiKey, key: keyDown))
+    canvas.clear()
+    menu.render(canvas, rect(0, 0, 30, 5))
+    check menu.selected == 8
+    check menu.scrollOffset > 0
+    check "item-8" in canvas.plainText
+
   test "input edits UTF-8 and submits text":
     let input = newInput()
     input.insert("hé")
@@ -94,6 +109,53 @@ suite "core canvas and app":
     input.onSubmit = proc (text: string) = submitted = text
     discard input.handle(UiEvent(kind: uiKey, key: keyEnter))
     check submitted == "é"
+
+  test "input paints a visible cursor at the end and over text":
+    let inputStyle = defaultStyle().withBackground(ansi256(236))
+    let input = newInput(style = inputStyle)
+    input.insert("abc")
+    var canvas = newCanvas(size(12, 1))
+    input.render(canvas, rect(0, 0, 12, 1))
+    check canvas.getCell(10, 0).style.background.kind == colorAnsi256
+    check canvas.getCell(10, 0).style.background.value == 236
+    check canvas.getCell(5, 0).glyph.int == 0x258c
+    check attrReverse in canvas.getCell(5, 0).style.attributes
+    discard input.handle(UiEvent(kind: uiKey, key: keyLeft))
+    canvas.clear()
+    input.render(canvas, rect(0, 0, 12, 1))
+    check canvas.getCell(4, 0).glyph.int == ord('c')
+    check attrReverse in canvas.getCell(4, 0).style.attributes
+
+  test "input preserves blank lines":
+    let input = newInput()
+    input.setText("a\n\nb")
+    var canvas = newCanvas(size(12, 3))
+    input.render(canvas, rect(0, 0, 12, 3))
+    check canvas.lineText(0).startsWith("> a")
+    check canvas.lineText(1).startsWith("  ")
+    check canvas.lineText(2).startsWith("  b")
+    input.setText("\n\n")
+    canvas.clear()
+    input.render(canvas, rect(0, 0, 12, 3))
+    check canvas.getCell(2, 2).glyph.int == 0x258c
+    let typed = newInput()
+    discard typed.handle(UiEvent(kind: uiKey, key: keyShiftEnter))
+    discard typed.handle(UiEvent(kind: uiKey, key: keyShiftEnter))
+    check typed.text == "\n\n"
+    typed.setText("a\nb\nc\nd")
+    canvas.clear()
+    typed.render(canvas, rect(0, 0, 12, 3))
+    check typed.scrollOffset == 1
+    check canvas.lineText(2).startsWith("  d")
+    check canvas.getCell(3, 2).glyph.int == 0x258c
+
+  test "input moves vertically without losing the cursor column":
+    let input = newInput()
+    input.setText("one\ntwo")
+    discard input.handle(UiEvent(kind: uiKey, key: keyUp))
+    check input.cursor == 3
+    discard input.handle(UiEvent(kind: uiKey, key: keyDown))
+    check input.cursor == 7
 
 suite "transcript":
   test "reduces a streamed agent turn into stable items":
@@ -153,6 +215,18 @@ suite "transcript":
     let handled = view.handle(UiEvent(kind: uiKey, key: keyChar, text: "y"))
     check handled == eventHandled
     check allowed == 1
+
+  test "escape denies approval without exiting":
+    var allowed = -1
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-escape",
+      toolName: "bash")
+    view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-escape",
+      approve: proc (value: bool) = allowed = if value: 1 else: 0)
+    let handled = view.handle(UiEvent(kind: uiKey, key: keyEscape))
+    check handled == eventHandled
+    check allowed == 0
+    check not view.awaitingApproval
 
   test "collapses and expands long tool output":
     let view = newTranscriptWidget()

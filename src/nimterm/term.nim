@@ -66,9 +66,16 @@ proc enableModifyOtherKeys() =
   ## Also request Alt-sends-ESC so Option+Enter becomes ESC CR on macOS.
   termWrite("\e[?1036h")
 
+proc enableKittyKeyboard() =
+  ## Ask Kitty-compatible terminals to report modifier-bearing keys as CSI-u.
+  termWrite("\e[>1u")
+
 proc disableModifyOtherKeys() =
   termWrite("\e[>4;0m")
   termWrite("\e[?1036l")
+
+proc disableKittyKeyboard() =
+  termWrite("\e[<u")
 
 proc enableBracketedPaste() =
   termWrite("\e[?2004h")
@@ -116,6 +123,7 @@ proc termInit*() =
   hideCursor()
   enableMouse()
   enableModifyOtherKeys()
+  enableKittyKeyboard()
   enableBracketedPaste()
   gTermActive = true
   stdout.flushFile()
@@ -123,6 +131,7 @@ proc termInit*() =
 proc termShutdown*() =
   if not gTermActive: return
   disableBracketedPaste()
+  disableKittyKeyboard()
   disableModifyOtherKeys()
   disableMouse()
   showCursor()

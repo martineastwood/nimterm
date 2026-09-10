@@ -1,7 +1,6 @@
 ## Editable text input widget with UTF-8-safe cursor movement.
 
-import std/strutils
-from std/unicode import Rune, fastRuneAt, isWhiteSpace
+from std/unicode import Rune, fastRuneAt, isWhiteSpace, runeLen
 import ../canvas
 import ../events
 import ../geometry
@@ -16,13 +15,25 @@ type
     prefix*: string
     continuationPrefix*: string
     style*: Style
+    cursorStyle*: Style
+    cursorBarStyle*: Style
+    paddingLeft*: int
+    paddingRight*: int
+    paddingTop*: int
+    paddingBottom*: int
+    scrollOffset*: int
     onChange*: proc (text: string) {.closure.}
     onSubmit*: proc (text: string) {.closure.}
 
+proc defaultCursorStyle(): Style =
+  result = defaultStyle()
+  result.attributes.incl attrReverse
+
 proc newInput*(prefix = "> ", continuationPrefix = "  ",
-               style = defaultStyle()): InputWidget =
+               style = defaultStyle(), cursorStyle = defaultCursorStyle(),
+               cursorBarStyle = defaultCursorStyle()): InputWidget =
   InputWidget(prefix: prefix, continuationPrefix: continuationPrefix,
-    style: style)
+    style: style, cursorStyle: cursorStyle, cursorBarStyle: cursorBarStyle)
 
 proc previousPosition(text: string, position: int): int =
   result = min(max(position, 0), text.len)
@@ -100,6 +111,61 @@ proc wordForward(widget: InputWidget) =
     if rune.isWhiteSpace: break
     widget.cursor = next
 
+proc cursorLocation(text: string, cursor: int): tuple[line, column: int] =
+  let stop = min(max(cursor, 0), text.len)
+  var position = 0
+  while position < stop:
+    var next = position
+    var rune: Rune
+    fastRuneAt(text, next, rune)
+    if next <= position: break
+    if rune.int == 10:
+      inc result.line
+      result.column = 0
+    else:
+      inc result.column
+    position = next
+
+proc byteAtColumn(text: string, column: int): int =
+  result = 0
+  for _ in 0 ..< max(0, column):
+    let next = nextPosition(text, result)
+    if next <= result: break
+    result = next
+
+proc inputLines(text: string): seq[string] =
+  var line = ""
+  for ch in text:
+    if ch == '\n':
+      result.add line
+      line = ""
+    else:
+      line.add ch
+  result.add line
+
+proc lineStartByte(text: string, lineIndex: int): int =
+  var line = 0
+  var position = 0
+  while position < text.len and line < lineIndex:
+    if text[position] == '\n': inc line
+    inc position
+  position
+
+proc lineEndByte(text: string, start: int): int =
+  result = start
+  while result < text.len and text[result] != '\n': inc result
+
+proc moveVertical(widget: InputWidget, delta: int) =
+  let lines = widget.text.inputLines
+  let current = cursorLocation(widget.text, widget.cursor)
+  let target = clamp(current.line + delta, 0, lines.high)
+  if target == current.line: return
+  let start = lineStartByte(widget.text, target)
+  let finish = lineEndByte(widget.text, start)
+  let line = widget.text[start ..< finish]
+  let column = min(current.column, line.runeLen)
+  widget.cursor = start + byteAtColumn(line, column)
+
 method handle*(widget: InputWidget, event: UiEvent): EventResult =
   if event.kind != uiKey: return eventIgnored
   case event.key
@@ -117,6 +183,10 @@ method handle*(widget: InputWidget, event: UiEvent): EventResult =
     widget.wordBackward()
   of keyAltF:
     widget.wordForward()
+  of keyUp:
+    widget.moveVertical(-1)
+  of keyDown:
+    widget.moveVertical(1)
   of keyHome, keyCtrlA:
     widget.cursor = 0
   of keyEnd, keyCtrlE:
@@ -134,15 +204,51 @@ method handle*(widget: InputWidget, event: UiEvent): EventResult =
 method measure*(widget: InputWidget, constraints: Constraints): Size =
   var width = 0
   var height = 0
-  for line in widget.text.splitLines:
+  for line in widget.text.inputLines:
     width = max(width, line.len)
     inc height
-  constraints.clamp(size(width + widget.prefix.len, max(1, height)))
+  constraints.clamp(size(width + widget.prefix.len + widget.paddingLeft +
+    widget.paddingRight, max(1, height) + widget.paddingTop +
+    widget.paddingBottom))
 
 method paint*(widget: InputWidget, canvas: var Canvas) =
-  let lines = widget.text.splitLines
-  for i, line in lines:
-    if widget.area.y + i >= widget.area.y + widget.area.h: break
-    let prefix = if i == 0: widget.prefix else: widget.continuationPrefix
-    canvas.writeText(widget.area.x, widget.area.y + i, prefix & line,
-      widget.style, widget.area.w)
+  for row in widget.area.y ..< widget.area.y + widget.area.h:
+    for col in widget.area.x ..< widget.area.x + widget.area.w:
+      canvas.setCell(col, row, Cell(glyph: Rune(32), style: widget.style))
+  let lines = widget.text.inputLines
+  let cursor = cursorLocation(widget.text, widget.cursor)
+  let contentX = widget.area.x + max(0, widget.paddingLeft)
+  let contentWidth = max(0, widget.area.w - max(0, widget.paddingLeft) -
+    max(0, widget.paddingRight))
+  let contentY = widget.area.y + max(0, widget.paddingTop)
+  let contentBottom = widget.area.y + widget.area.h - max(0, widget.paddingBottom)
+  let visibleRows = max(1, contentBottom - contentY)
+  widget.scrollOffset = clamp(widget.scrollOffset, 0,
+    max(0, lines.len - visibleRows))
+  if cursor.line < widget.scrollOffset:
+    widget.scrollOffset = cursor.line
+  elif cursor.line >= widget.scrollOffset + visibleRows:
+    widget.scrollOffset = cursor.line - visibleRows + 1
+  for rowIndex in 0 ..< visibleRows:
+    let lineIndex = widget.scrollOffset + rowIndex
+    if lineIndex >= lines.len: break
+    let line = lines[lineIndex]
+    let prefix = if lineIndex == 0: widget.prefix else: widget.continuationPrefix
+    let row = contentY + rowIndex
+    if lineIndex != cursor.line:
+      canvas.writeText(contentX, row, prefix & line, widget.style, contentWidth)
+      continue
+    let cursorByte = byteAtColumn(line, cursor.column)
+    let cursorX = contentX + prefix.runeLen + cursor.column
+    canvas.writeText(contentX, row, prefix & line[0 ..< cursorByte],
+      widget.style, contentWidth)
+    let cursorEnd = if cursorByte < line.len: nextPosition(line, cursorByte)
+                    else: cursorByte
+    let cursorText = if cursorByte < line.len: line[cursorByte ..< cursorEnd]
+                     else: "▌"
+    let cursorPaintStyle = if cursorByte < line.len: widget.cursorStyle
+                           else: widget.cursorBarStyle
+    canvas.writeText(cursorX, row, cursorText, cursorPaintStyle, 1)
+    if cursorEnd < line.len:
+      canvas.writeText(cursorX + 1, row, line[cursorEnd .. ^1], widget.style,
+        max(0, contentX + contentWidth - cursorX - 1))

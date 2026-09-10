@@ -5,6 +5,7 @@
 ## No hot reload, no OSC queries, no per-frame color math.
 
 import std/[json, os, strutils, terminal]
+import ./style as nimstyle
 
 type
   ColorDepth* = enum
@@ -94,6 +95,60 @@ proc colorsOn*(t: Theme): bool =
 proc paint*(t: Theme, code, text: string): string =
   if code.len == 0 or t.reset.len == 0: return text
   code & text & t.reset
+
+proc styleFromSgr(code: string): nimstyle.Style =
+  ## Convert a compiled theme token back into Nimterm's semantic style.
+  ## Theme tokens are still serialized for the plain console path, while
+  ## widgets consume semantic cells.
+  result = nimstyle.defaultStyle()
+  if code.len < 4 or code[0] != '\e' or code[1] != '[' or code[^1] != 'm':
+    return
+  let parts = code[2 ..< code.high].split(';')
+  var i = 0
+  while i < parts.len:
+    try:
+      let value = parseInt(parts[i])
+      case value
+      of 1: result.attributes.incl nimstyle.attrBold
+      of 2: result.attributes.incl nimstyle.attrDim
+      of 3: result.attributes.incl nimstyle.attrItalic
+      of 4: result.attributes.incl nimstyle.attrUnderline
+      of 7: result.attributes.incl nimstyle.attrReverse
+      of 30 .. 37: result.foreground = nimstyle.ansi16(value - 30)
+      of 90 .. 97: result.foreground = nimstyle.ansi16(value - 90 + 8)
+      of 40 .. 47: result.background = nimstyle.ansi16(value - 40)
+      of 100 .. 107: result.background = nimstyle.ansi16(value - 100 + 8)
+      of 38, 48:
+        let background = value == 48
+        if i + 2 < parts.len and parts[i + 1] == "5":
+          let color = parseInt(parts[i + 2])
+          if background: result.background = nimstyle.ansi256(color)
+          else: result.foreground = nimstyle.ansi256(color)
+          i += 2
+        elif i + 4 < parts.len and parts[i + 1] == "2":
+          let r = parseInt(parts[i + 2])
+          let g = parseInt(parts[i + 3])
+          let b = parseInt(parts[i + 4])
+          if background: result.background = nimstyle.rgb(r, g, b)
+          else: result.foreground = nimstyle.rgb(r, g, b)
+          i += 4
+      else: discard
+    except ValueError:
+      discard
+    inc i
+
+proc themedStyle*(t: Theme, foreground = "", background = "",
+                  attributes: set[nimstyle.TextAttribute] = {}): nimstyle.Style =
+  result = nimstyle.defaultStyle()
+  if foreground.len > 0:
+    let parsed = styleFromSgr(foreground)
+    result.foreground = parsed.foreground
+    result.attributes = result.attributes + parsed.attributes
+  if background.len > 0:
+    let parsed = styleFromSgr(background)
+    result.background = parsed.background
+    result.attributes = result.attributes + parsed.attributes
+  result.attributes = result.attributes + attributes
 
 proc italicHeading*(t: Theme): string =
   ## Prefer a single SGR (`\e[1;93m` → `\e[1;3;93m`); else prefix italic.

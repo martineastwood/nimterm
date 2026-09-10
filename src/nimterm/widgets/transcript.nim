@@ -100,6 +100,14 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
         widget.transcript.items[i].approvalRequired = false
         return eventHandled
       return eventIgnored
+    of keyEscape:
+      for i in countdown(widget.transcript.items.high, 0):
+        if not widget.transcript.items[i].approvalRequired: continue
+        let callback = widget.transcript.items[i].approve
+        if not callback.isNil: callback(false)
+        widget.transcript.items[i].approvalRequired = false
+        return eventHandled
+      return eventIgnored
     of keyCtrlO:
       var expandable = false
       var expand = false

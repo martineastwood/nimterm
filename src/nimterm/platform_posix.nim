@@ -107,7 +107,7 @@ method present*(backend: PosixBackend, frame: Canvas) =
         output.add sgr(cell.style)
         activeStyle = cell.style
         hasStyle = true
-      output.add toUTF8(cell.glyph)
+      if not cell.continuation: output.add toUTF8(cell.glyph) & cell.combining
       if attrStrikethrough in cell.style.attributes and cell.glyph.int != 32:
         ## Some terminal emulators ignore SGR 9; draw a visible fallback.
         output.add "\u0336"

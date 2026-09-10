@@ -1,6 +1,6 @@
 ## Compact transcript widget backed by nimterm's retained event reducer.
 
-import std/strutils
+import std/[json, strutils]
 from std/unicode import Rune, fastRuneAt, runeLenAt
 import ../canvas
 import ../ansi
@@ -11,7 +11,6 @@ import ../markdown as markdown_renderer
 import ../style
 import ../transcript as transcript_model
 import ../widget
-import ./diff
 
 type
   TranscriptWidget* = ref object of Widget
@@ -33,24 +32,14 @@ type
     selectionStartCol*: int
     selectionEndCol*: int
     onCopy*: proc (text: string) {.closure.}
-    lineCache: seq[CachedItemLines]
+    onApproval*: proc (runId, toolId, choiceId: string) {.closure.}
+    toolDetails*: proc (name: string, input: JsonNode,
+                        output: string): seq[string] {.closure.}
 
   TranscriptLine = object
     text: string
     style: Style
     railStyle: Style
-
-  CachedItemLines = object
-    id: string
-    kind: TranscriptItemKind
-    textLen: int
-    title: string
-    model: string
-    pending: bool
-    isError: bool
-    expanded: bool
-    approvalRequired: bool
-    lines: seq[string]
 
 proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           userStyle = defaultStyle(),
@@ -63,7 +52,8 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
     toolStyle: toolStyle, errorStyle: errorStyle, selectionStart: -1,
     selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
 
-proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
+proc itemLines(widget: TranscriptWidget,
+               item: transcript_model.TranscriptItem): seq[string] =
   case item.kind
   of tikUser:
     result.add "│ You"
@@ -79,25 +69,16 @@ proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
     for line in item.text.splitLines: result.add "│ " & line
   of tikTool:
     result.add "│ " & (if item.isError: "✗ " else: "● ") & item.title
-    let document = if not item.pending and not item.isError:
-      toolDiffDocument(item.title, item.toolInput)
-    else:
-      DiffDocument()
-    if document.lines.len > 0:
-      result.add "│   " & document.path
-      let shownDiff = if item.expanded: document.lines.len else:
-        min(2, document.lines.len)
-      for i in 0 ..< shownDiff:
-        let line = document.lines[i]
-        let prefix = case line.kind
-          of dlRemoved: "- "
-          of dlAdded: "+ "
-          of dlContext: "  "
-          of dlHeader: "@@ "
-        result.add "│   " & prefix & line.text
-      if not item.expanded and document.lines.len > shownDiff:
-        result.add "│   … " & $(document.lines.len - shownDiff) &
-          " diff lines (Ctrl-O)"
+    let details = if not item.pending and not item.isError and
+        not widget.toolDetails.isNil:
+      widget.toolDetails(item.title, item.toolInput, item.text)
+    else: @[]
+    if details.len > 0:
+      let shownDetails = if item.expanded: details.len else: min(3, details.len)
+      for i in 0 ..< shownDetails: result.add "│   " & details[i]
+      if not item.expanded and details.len > shownDetails:
+        result.add "│   … " & $(details.len - shownDetails) &
+          " detail lines (Ctrl-O)"
     let lines = item.text.splitLines
     let shown = if item.expanded: lines.len else: min(2, lines.len)
     for i in 0 ..< shown: result.add "│   " & lines[i]
@@ -105,10 +86,8 @@ proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
       result.add "│   … " & $(lines.len - shown) & " more (Ctrl-O)"
     if item.pending: result.add "│   working"
     if item.approvalRequired:
-      result.add "│   [Enter] once"
-      if not item.rememberSession.isNil: result.add "  [s] session"
-      if not item.rememberProject.isNil: result.add "  [p] project"
-      result.add "  [n] deny"
+      for choice in item.approvalChoices:
+        result.add "│   [" & choice.key & "] " & choice.label
   of tikError:
     for line in item.text.splitLines: result.add "│ " & line
   of tikStatus:
@@ -147,26 +126,10 @@ proc wrapTranscriptLine(text: string, width: int): seq[string] =
   for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix))):
     result.add prefix & chunk
 
-proc cacheMatches(cache: CachedItemLines,
-                  item: transcript_model.TranscriptItem): bool =
-  cache.id == item.id and cache.kind == item.kind and
-    cache.textLen == item.text.len and cache.title == item.title and
-    cache.model == item.model and cache.pending == item.pending and
-    cache.isError == item.isError and cache.expanded == item.expanded and
-    cache.approvalRequired == item.approvalRequired
-
 proc cachedItemLines(widget: TranscriptWidget, index: int,
                      item: transcript_model.TranscriptItem): seq[string] =
-  if index < widget.lineCache.len and widget.lineCache[index].cacheMatches(item):
-    return widget.lineCache[index].lines
-  let lines = item.itemLines
-  if index >= widget.lineCache.len:
-    widget.lineCache.setLen(index + 1)
-  widget.lineCache[index] = CachedItemLines(id: item.id, kind: item.kind,
-    textLen: item.text.len, title: item.title, model: item.model,
-    pending: item.pending, isError: item.isError, expanded: item.expanded,
-    approvalRequired: item.approvalRequired, lines: lines)
-  lines
+  discard index
+  widget.itemLines(item)
 
 proc apply*(widget: TranscriptWidget, event: AgentUiEvent) =
   widget.transcript.apply(event)
@@ -282,25 +245,25 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
     of keyChar, keyEnter:
       for i in countdown(widget.transcript.items.high, 0):
         if not widget.transcript.items[i].approvalRequired: continue
-        let choice = if event.key == keyEnter: "y" else: event.text.toLowerAscii
-        if choice notin ["y", "n", "s", "p"]:
-          return eventIgnored
-        if choice == "s":
-          if widget.transcript.items[i].rememberSession.isNil: return eventIgnored
-          widget.transcript.items[i].rememberSession()
-        elif choice == "p":
-          if widget.transcript.items[i].rememberProject.isNil: return eventIgnored
-          widget.transcript.items[i].rememberProject()
-        let callback = widget.transcript.items[i].approve
-        if not callback.isNil: callback(choice != "n")
+        let key = if event.key == keyEnter: "enter" else: event.text.toLowerAscii
+        var selected = -1
+        for j, choice in widget.transcript.items[i].approvalChoices:
+          if choice.key.toLowerAscii == key: selected = j
+        if selected < 0: return eventIgnored
+        let choice = widget.transcript.items[i].approvalChoices[selected]
+        if not widget.onApproval.isNil:
+          widget.onApproval(widget.transcript.items[i].runId,
+            widget.transcript.items[i].id, choice.id)
         widget.transcript.items[i].approvalRequired = false
         return eventHandled
       return eventIgnored
     of keyEscape:
       for i in countdown(widget.transcript.items.high, 0):
         if not widget.transcript.items[i].approvalRequired: continue
-        let callback = widget.transcript.items[i].approve
-        if not callback.isNil: callback(false)
+        if not widget.onApproval.isNil:
+          widget.onApproval(widget.transcript.items[i].runId,
+            widget.transcript.items[i].id,
+            widget.transcript.items[i].cancelChoiceId)
         widget.transcript.items[i].approvalRequired = false
         return eventHandled
       return eventIgnored
@@ -308,22 +271,22 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
       var expandable = false
       var expand = false
       for item in widget.transcript.items:
-        let document = if item.kind == tikTool and not item.isError:
-          toolDiffDocument(item.title, item.toolInput)
-        else:
-          DiffDocument()
+        let details = if item.kind == tikTool and not item.isError and
+            not widget.toolDetails.isNil:
+          widget.toolDetails(item.title, item.toolInput, item.text)
+        else: @[]
         if item.kind == tikTool and (item.text.splitLines.len > 2 or
-            document.lines.len > 2):
+            details.len > 2):
           expandable = true
           if not item.expanded: expand = true
       if not expandable: return eventIgnored
       for item in widget.transcript.items.mitems:
-        let document = if item.kind == tikTool and not item.isError:
-          toolDiffDocument(item.title, item.toolInput)
-        else:
-          DiffDocument()
+        let details = if item.kind == tikTool and not item.isError and
+            not widget.toolDetails.isNil:
+          widget.toolDetails(item.title, item.toolInput, item.text)
+        else: @[]
         if item.kind == tikTool and (item.text.splitLines.len > 2 or
-            document.lines.len > 2):
+            details.len > 2):
           item.expanded = expand
       widget.scrollOffset = 0
       return eventHandled

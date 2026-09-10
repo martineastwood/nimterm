@@ -1,12 +1,13 @@
 ## Editable text input widget with UTF-8-safe cursor movement.
 
-from std/unicode import Rune, fastRuneAt, isWhiteSpace, runeLen
+from std/unicode import Rune, fastRuneAt, isWhiteSpace
 import ../canvas
 import ../events
 import ../geometry
 import ../keys
 import ../style
 import ../widget
+import ../text_width
 
 type
   InputWidget* = ref object of Widget
@@ -130,13 +131,18 @@ proc cursorLocation(text: string, cursor: int): tuple[line, column: int] =
       inc result.line
       result.column = 0
     else:
-      inc result.column
+      result.column += rune.cellWidth
     position = next
 
 proc byteAtColumn(text: string, column: int): int =
   result = 0
-  for _ in 0 ..< max(0, column):
-    let next = nextPosition(text, result)
+  var width = 0
+  while result < text.len and width < max(0, column):
+    var rune: Rune
+    var next = result
+    fastRuneAt(text, next, rune)
+    if width + rune.cellWidth > column: break
+    width += rune.cellWidth
     if next <= result: break
     result = next
 
@@ -178,15 +184,17 @@ proc wrappedInputLines(text: string, contentWidth: int,
       let segmentStart = position
       let segmentColumn = column
       let prefixWidth = if sourceLine == 0 and firstSegment:
-        prefix.runeLen else: continuationPrefix.runeLen
+        prefix.displayWidth else: continuationPrefix.displayWidth
       let segmentWidth = max(1, width - prefixWidth)
       var count = 0
-      while position < lineEnd and count < segmentWidth:
+      while position < lineEnd:
         var next = position
         var rune: Rune
         fastRuneAt(text, next, rune)
+        let width = rune.cellWidth
+        if count > 0 and count + width > segmentWidth: break
         position = next
-        inc count
+        count += width
       result.add WrappedInputLine(text: text[segmentStart ..< position],
         sourceLine: sourceLine, startColumn: segmentColumn,
         endColumn: segmentColumn + count, firstSegment: firstSegment)
@@ -211,7 +219,7 @@ proc moveVertical(widget: InputWidget, delta: int) =
   let start = lineStartByte(widget.text, target)
   let finish = lineEndByte(widget.text, start)
   let line = widget.text[start ..< finish]
-  let column = min(current.column, line.runeLen)
+  let column = min(current.column, line.displayWidth)
   widget.cursor = start + byteAtColumn(line, column)
 
 method handle*(widget: InputWidget, event: UiEvent): EventResult =
@@ -304,7 +312,7 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
         contentWidth)
       continue
     let cursorByte = byteAtColumn(line.text, cursorVisualColumn)
-    let cursorX = contentX + prefix.runeLen + cursorVisualColumn
+    let cursorX = contentX + prefix.displayWidth + cursorVisualColumn
     canvas.writeText(contentX, row, prefix & line.text[0 ..< cursorByte],
       widget.style, contentWidth)
     let cursorEnd = if cursorByte < line.text.len: nextPosition(line.text, cursorByte)
@@ -315,7 +323,8 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
       "▌"
     let cursorPaintStyle = if cursorByte < line.text.len: widget.cursorStyle
                            else: widget.cursorBarStyle
-    canvas.writeText(cursorX, row, cursorText, cursorPaintStyle, 1)
+    let cursorWidth = max(1, cursorText.displayWidth)
+    canvas.writeText(cursorX, row, cursorText, cursorPaintStyle, cursorWidth)
     if cursorEnd < line.text.len:
-      canvas.writeText(cursorX + 1, row, line.text[cursorEnd .. ^1], widget.style,
-        max(0, contentX + contentWidth - cursorX - 1))
+      canvas.writeText(cursorX + cursorWidth, row, line.text[cursorEnd .. ^1],
+        widget.style, max(0, contentX + contentWidth - cursorX - cursorWidth))

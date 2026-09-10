@@ -2,6 +2,7 @@
 
 from std/unicode import Rune, fastRuneAt
 import std/strutils
+import ./text_width
 
 proc skipAnsi*(s: string, i: var int): bool =
   ## If `s[i]` starts an ANSI sequence, advance `i` past it and return true.
@@ -39,7 +40,7 @@ proc ansiVisibleWidth*(s: string): int =
       continue
     var r: Rune
     fastRuneAt(s, i, r)
-    inc result
+    result += r.cellWidth
 
 proc wrapAnsi*(s: string, width: int): seq[string] =
   ## Hard-wrap ANSI text without counting escape sequences as columns.
@@ -67,12 +68,13 @@ proc wrapAnsi*(s: string, width: int): seq[string] =
       line = active
       column = 0
       continue
-    if column >= width:
+    let runeWidth = rune.cellWidth
+    if column > 0 and column + runeWidth > width:
       if active.len > 0: line.add "\e[0m"
       result.add line
       line = active
       column = 0
     line.add s[start ..< i]
-    inc column
+    column += runeWidth
   if line.len > 0 or result.len == 0:
     result.add line

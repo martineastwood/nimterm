@@ -1,6 +1,6 @@
 import std/[json, strutils, unittest]
 import nimterm/[ansi, app, backend, canvas, events, geometry, markdown, keys,
-  style, theme, transcript, widget, widgets]
+  style, text_width, theme, transcript, widget, widgets]
 when not defined(windows):
   import nimterm/platform_posix
 
@@ -8,6 +8,11 @@ suite "ansi text":
   test "visible width ignores escapes":
     check ansiVisibleWidth("\e[31mred\e[0m") == 3
     check stripAnsi("\e[31mred\e[0m") == "red"
+
+  test "display width follows terminal columns":
+    check displayWidth("界") == 2
+    check displayWidth("e\u0301") == 1
+    check ansiVisibleWidth("\e[31m界\e[0m") == 2
 
 suite "markdown":
   test "renders common inline markup without color":
@@ -77,6 +82,23 @@ suite "core canvas and app":
     var canvas = newCanvas(size(8, 2))
     canvas.writeText(1, 0, "hi")
     check canvas.plainText == " hi     \n        "
+
+  test "canvas reserves wide cells and joins combining marks":
+    var canvas = newCanvas(size(4, 1))
+    canvas.writeText(0, 0, "界e\u0301")
+    check canvas.getCell(1, 0).continuation
+    check canvas.getCell(2, 0).combining.len > 0
+
+  test "app poll hook can feed and stop the event loop":
+    let backend = FakeBackend()
+    var app = newApp(backend)
+    var polls = 0
+    app.pollIntervalMs = 0
+    app.onPoll = proc (running: var App) =
+      inc polls
+      running.running = false
+    app.run()
+    check polls == 1
 
   test "app dispatches agent events and presents a frame":
     let backend = FakeBackend(events: @[agentEvent(AgentUiEvent(
@@ -246,6 +268,18 @@ suite "transcript":
       text: "")
     check transcript.items.len == 0
 
+  test "keeps interleaved runs separate":
+    var transcript = newTranscript()
+    transcript.apply AgentUiEvent(kind: ueTextDelta, runId: "a", step: 0,
+      text: "one")
+    transcript.apply AgentUiEvent(kind: ueTextDelta, runId: "b", step: 0,
+      text: "two")
+    transcript.apply AgentUiEvent(kind: ueTextDelta, runId: "a", step: 0,
+      text: " three")
+    check transcript.items.len == 2
+    check transcript.items[0].text == "one three"
+    check transcript.items[1].text == "two"
+
   test "renders markdown, cards, diffs, and transcript into cells":
     var transcript = newTranscript()
     transcript.appendUser("hello")
@@ -295,35 +329,41 @@ suite "transcript":
   test "resolves a generic approval callback from the transcript":
     var allowed = -1
     let view = newTranscriptWidget()
+    view.onApproval = proc (runId, toolId, choiceId: string) =
+      discard runId; discard toolId
+      if choiceId == "allow": allowed = 1
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-1",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-1",
-      approve: proc (value: bool) = allowed = if value: 1 else: 0)
+      approvalChoices: @[ApprovalChoice(id: "allow", key: "y", label: "allow")])
     let handled = view.handle(UiEvent(kind: uiKey, key: keyChar, text: "y"))
     check handled == eventHandled
     check allowed == 1
 
-  test "remember-session and remember-project actions resolve approval":
-    var allowed = -1
-    var remembered = ""
+  test "approval actions are supplied by the application":
+    var selected = ""
     let view = newTranscriptWidget()
+    view.onApproval = proc (runId, toolId, choiceId: string) =
+      discard runId; discard toolId; selected = choiceId
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-scope",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-scope",
-      approve: proc (value: bool) = allowed = if value: 1 else: 0,
-      rememberSession: proc () = remembered = "session",
-      rememberProject: proc () = remembered = "project")
+      approvalChoices: @[
+        ApprovalChoice(id: "once", key: "enter", label: "once"),
+        ApprovalChoice(id: "session", key: "s", label: "session")])
     check view.handle(UiEvent(kind: uiKey, key: keyChar, text: "s")) == eventHandled
-    check remembered == "session"
-    check allowed == 1
+    check selected == "session"
 
   test "escape denies approval without exiting":
     var allowed = -1
     let view = newTranscriptWidget()
+    view.onApproval = proc (runId, toolId, choiceId: string) =
+      discard runId; discard toolId
+      if choiceId == "deny": allowed = 0
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-escape",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-escape",
-      approve: proc (value: bool) = allowed = if value: 1 else: 0)
+      cancelChoiceId: "deny")
     let handled = view.handle(UiEvent(kind: uiKey, key: keyEscape))
     check handled == eventHandled
     check allowed == 0
@@ -332,10 +372,13 @@ suite "transcript":
   test "enter approves a tool once":
     var allowed = -1
     let view = newTranscriptWidget()
+    view.onApproval = proc (runId, toolId, choiceId: string) =
+      discard runId; discard toolId
+      if choiceId == "once": allowed = 1
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-enter",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-enter",
-      approve: proc (value: bool) = allowed = if value: 1 else: 0)
+      approvalChoices: @[ApprovalChoice(id: "once", key: "enter", label: "once")])
     check view.handle(UiEvent(kind: uiKey, key: keyEnter)) == eventHandled
     check allowed == 1
     check not view.awaitingApproval
@@ -356,6 +399,9 @@ suite "transcript":
 
   test "renders edit tool diffs in the completed tool card":
     let view = newTranscriptWidget()
+    view.toolDetails = proc (name: string, input: JsonNode,
+                             output: string): seq[string] =
+      @[input["path"].getStr, "- old line", "+ new line"]
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-edit",
       toolName: "edit", toolInput: %*{
         "path": "src/main.nim",
@@ -372,6 +418,9 @@ suite "transcript":
 
   test "Ctrl-O expands collapsed tool diffs":
     let view = newTranscriptWidget()
+    view.toolDetails = proc (name: string, input: JsonNode,
+                             output: string): seq[string] =
+      @[input["path"].getStr, "+ one", "+ two", "+ three"]
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-write",
       toolName: "write", toolInput: %*{
         "path": "new.txt",
@@ -381,7 +430,7 @@ suite "transcript":
       toolOutput: "OK")
     var canvas = newCanvas(size(30, 10))
     view.render(canvas, rect(0, 0, 30, 10))
-    check "diff lines (Ctrl-O)" in canvas.plainText
+    check "detail lines (Ctrl-O)" in canvas.plainText
     check view.handle(UiEvent(kind: uiKey, key: keyCtrlO)) == eventHandled
     canvas.clear()
     view.render(canvas, rect(0, 0, 30, 10))

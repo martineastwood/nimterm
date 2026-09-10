@@ -6,7 +6,7 @@
 ## blockquotes, horizontal rules, and tables.
 
 import std/[strutils, sequtils]
-from std/unicode import runeLen
+import ./text_width
 import ./theme
 
 type
@@ -154,7 +154,7 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
     for c, cell in row:
       if c < numCols:
         let visible = renderInline(cell, false)
-        colWidths[c] = max(colWidths[c], runeLen(visible))
+        colWidths[c] = max(colWidths[c], displayWidth(visible))
 
   let topBorder = "┌" & colWidths.mapIt("─".repeat(it + 2)).join("┬") & "┐"
   let midBorder = "├" & colWidths.mapIt("─".repeat(it + 2)).join("┼") & "┤"
@@ -170,7 +170,7 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
     for c in 0 ..< numCols:
       let cell = if c < row.len: row[c] else: ""
       let rendered = renderInline(cell, color)
-      let pad = colWidths[c] - runeLen(renderInline(cell, false))
+      let pad = colWidths[c] - displayWidth(renderInline(cell, false))
       let content = " " & rendered & " ".repeat(pad) & " "
       if r == 0 and color:
         line.add t.heading & content & t.reset & "│"

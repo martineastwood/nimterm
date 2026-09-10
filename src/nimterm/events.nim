@@ -4,6 +4,11 @@ import std/json
 import ./keys
 
 type
+  ApprovalChoice* = object
+    id*: string
+    key*: string
+    label*: string
+
   UiMouseKind* = enum
     umNone
     umPress
@@ -39,9 +44,8 @@ type
     isError*: bool
     durationMs*: int
     error*: string
-    approve*: proc (allowed: bool) {.closure.}
-    rememberSession*: proc () {.closure.}
-    rememberProject*: proc () {.closure.}
+    approvalChoices*: seq[ApprovalChoice]
+    cancelChoiceId*: string
 
   UiEventKind* = enum
     uiNone

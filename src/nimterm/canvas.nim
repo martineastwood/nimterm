@@ -5,10 +5,13 @@ import ./geometry
 import ./style
 import ./ansi
 import ./theme
+import ./text_width
 
 type
   Cell* = object
     glyph*: Rune
+    combining*: string
+    continuation*: bool
     style*: Style
 
   Canvas* = object
@@ -49,8 +52,17 @@ proc writeText*(canvas: var Canvas, x, y: int, text: string,
     fastRuneAt(text, i, rune)
     if rune.int == 10:
       break
-    canvas.setCell(col, y, Cell(glyph: rune, style: style))
-    inc col
+    let width = rune.cellWidth
+    if width == 0:
+      if col > x:
+        var cell = canvas.getCell(col - 1, y)
+        cell.combining.add rune.toUTF8
+        canvas.setCell(col - 1, y, cell)
+    elif col - x + width <= maxWidth:
+      canvas.setCell(col, y, Cell(glyph: rune, style: style))
+      if width == 2: canvas.setCell(col + 1, y,
+        Cell(glyph: Rune(32), style: style, continuation: true))
+      col += width
 
 proc writeAnsiText*(canvas: var Canvas, x, y: int, text: string,
                     baseStyle = defaultStyle(), maxWidth = int.high) =
@@ -75,14 +87,25 @@ proc writeAnsiText*(canvas: var Canvas, x, y: int, text: string,
         continue
     var rune: Rune
     fastRuneAt(text, i, rune)
-    canvas.setCell(col, y, Cell(glyph: rune, style: active))
-    inc col
+    let width = rune.cellWidth
+    if width == 0:
+      if col > x:
+        var cell = canvas.getCell(col - 1, y)
+        cell.combining.add rune.toUTF8
+        canvas.setCell(col - 1, y, cell)
+    elif col - x + width <= maxWidth:
+      canvas.setCell(col, y, Cell(glyph: rune, style: active))
+      if width == 2: canvas.setCell(col + 1, y,
+        Cell(glyph: Rune(32), style: active, continuation: true))
+      col += width
 
 proc lineText*(canvas: Canvas, y: int): string =
   if y < 0 or y >= canvas.size.h:
     return ""
   for x in 0 ..< canvas.size.w:
-    result.add canvas.getCell(x, y).glyph.toUTF8
+    let cell = canvas.getCell(x, y)
+    if not cell.continuation: result.add cell.glyph.toUTF8 & cell.combining
+    else: result.add ' '
 
 proc plainText*(canvas: Canvas): string =
   for y in 0 ..< canvas.size.h:

@@ -19,6 +19,8 @@ type
     running*: bool
     dirty*: bool
     onEvent*: proc (app: var App, event: UiEvent) {.closure.}
+    onPoll*: proc (app: var App) {.closure.}
+    pollIntervalMs*: int
 
 proc post*(queue: var EventQueue, event: UiEvent) =
   queue.events.add event
@@ -39,6 +41,7 @@ proc newApp*(backend: TerminalBackend, root: Widget = nil): App =
   result.frame = newCanvas(result.size)
   result.running = false
   result.dirty = true
+  result.pollIntervalMs = 16
 
 proc invalidate*(app: var App) =
   app.dirty = true
@@ -91,4 +94,6 @@ proc run*(app: var App) =
   app.running = true
   app.render()
   while app.running:
-    discard app.step(-1)
+    if not app.step(app.pollIntervalMs) and not app.onPoll.isNil:
+      app.onPoll(app)
+      if app.dirty: app.render()

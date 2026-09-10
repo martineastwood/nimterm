@@ -38,12 +38,13 @@ proc newQuestion*(prompt: string, options: seq[QuestionOption],
                   style = defaultStyle(), selectedStyle = defaultStyle(),
                   descriptionStyle = defaultStyle(), hintStyle = defaultStyle(),
                   allowFreeText = true, freeTextLabel = "Other"): QuestionWidget =
+  let cursorStyle = style.withAttribute(attrReverse)
   result = QuestionWidget(prompt: prompt, options: options,
     selected: if options.len > 0: 0 else: (if allowFreeText: 0 else: -1),
     allowFreeText: allowFreeText, freeTextLabel: freeTextLabel, style: style,
     selectedStyle: selectedStyle, descriptionStyle: descriptionStyle,
     hintStyle: hintStyle, freeText: newInput(prefix = "  > ", style = style,
-      cursorStyle = selectedStyle, cursorBarStyle = selectedStyle))
+      cursorStyle = cursorStyle, cursorBarStyle = cursorStyle))
 
 proc optionCount(widget: QuestionWidget): int =
   widget.options.len + (if widget.allowFreeText: 1 else: 0)

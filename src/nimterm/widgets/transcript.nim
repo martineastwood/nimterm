@@ -112,6 +112,21 @@ proc itemRailStyle(widget: TranscriptWidget, kind: TranscriptItemKind): Style =
   of tikError: widget.errorRailStyle
   of tikStatus: widget.thinkingRailStyle
 
+proc wrapTranscriptLine(text: string, width: int): seq[string] =
+  if width <= 0: return @[text]
+  var prefix = ""
+  if text.startsWith("│"):
+    prefix = "│"
+  elif text.startsWith("·"):
+    prefix = "·"
+  var prefixLen = prefix.len
+  while prefixLen < text.len and text[prefixLen] == ' ':
+    inc prefixLen
+  prefix = if prefixLen > 0: text[0 ..< prefixLen] else: ""
+  let body = if prefixLen < text.len: text[prefixLen .. ^1] else: ""
+  for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix))):
+    result.add prefix & chunk
+
 proc cacheMatches(cache: CachedItemLines,
                   item: transcript_model.TranscriptItem): bool =
   cache.id == item.id and cache.kind == item.kind and
@@ -149,8 +164,9 @@ proc allLines(widget: TranscriptWidget): seq[TranscriptLine] =
     let railStyle = widget.itemRailStyle(item.kind)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
     for line in widget.cachedItemLines(index, item):
-      result.add TranscriptLine(text: line, style: style,
-        railStyle: railStyle)
+      for wrapped in wrapTranscriptLine(line, widget.area.w):
+        result.add TranscriptLine(text: wrapped, style: style,
+          railStyle: railStyle)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
 
 proc visibleStart(widget: TranscriptWidget): int =

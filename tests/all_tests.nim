@@ -166,6 +166,14 @@ suite "core canvas and app":
     check canvas.lineText(2).startsWith("  d")
     check canvas.getCell(3, 2).glyph.int == 0x258c
 
+  test "input wraps long lines and keeps the cursor visible":
+    let input = newInput()
+    input.setText("abcdefgh")
+    var canvas = newCanvas(size(8, 3))
+    input.render(canvas, rect(0, 0, 8, 3))
+    check canvas.lineText(0).startsWith("> abcdef")
+    check canvas.lineText(1).startsWith("  gh▌")
+
   test "input moves vertically without losing the cursor column":
     let input = newInput()
     input.setText("one\ntwo")
@@ -229,6 +237,15 @@ suite "transcript":
     check transcript.items[3].text == "README.md"
     check not transcript.items[3].pending
 
+  test "ignores empty text and thinking deltas":
+    var transcript = newTranscript()
+    transcript.apply AgentUiEvent(kind: ueStepStarted, runId: "run-1", step: 0)
+    transcript.apply AgentUiEvent(kind: ueThinkingDelta, runId: "run-1",
+      step: 0, text: "")
+    transcript.apply AgentUiEvent(kind: ueTextDelta, runId: "run-1", step: 0,
+      text: "")
+    check transcript.items.len == 0
+
   test "renders markdown, cards, diffs, and transcript into cells":
     var transcript = newTranscript()
     transcript.appendUser("hello")
@@ -255,6 +272,15 @@ suite "transcript":
       lines: @[DiffLine(kind: dlAdded, text: "new")]))
     diff.render(canvas, rect(0, 8, 20, 3))
     check "+ new" in canvas.plainText
+
+  test "wraps long transcript lines":
+    var transcript = newTranscript()
+    transcript.appendUser("abcdefgh")
+    let view = newTranscriptWidget(transcript)
+    var canvas = newCanvas(size(8, 8))
+    view.render(canvas, rect(0, 0, 8, 8))
+    check "│ abcdef" in canvas.plainText
+    check "│ gh" in canvas.plainText
 
   test "transcript selection tolerates empty and unicode rows":
     var transcript = newTranscript()

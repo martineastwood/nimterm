@@ -62,6 +62,7 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
     transcript.activeAssistantId = ""
     transcript.activeThinkingId = ""
   of ueTextDelta:
+    if event.text.len == 0: return
     if transcript.activeAssistantId.len == 0:
       transcript.activeAssistantId = event.runId & ":" & $event.step & ":assistant"
       transcript.items.add TranscriptItem(kind: tikAssistant,
@@ -73,6 +74,7 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
       if event.model.len > 0:
         transcript.items[index].model = event.model
   of ueThinkingDelta:
+    if event.text.len == 0: return
     if transcript.activeThinkingId.len == 0:
       transcript.activeThinkingId = event.runId & ":" & $event.step & ":thinking"
       transcript.items.add TranscriptItem(kind: tikThinking,

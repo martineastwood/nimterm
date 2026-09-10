@@ -25,6 +25,13 @@ type
     onChange*: proc (text: string) {.closure.}
     onSubmit*: proc (text: string) {.closure.}
 
+  WrappedInputLine = object
+    text: string
+    sourceLine: int
+    startColumn: int
+    endColumn: int
+    firstSegment: bool
+
 proc defaultCursorStyle(): Style =
   result = defaultStyle()
   result.attributes.incl attrReverse
@@ -155,6 +162,47 @@ proc lineEndByte(text: string, start: int): int =
   result = start
   while result < text.len and text[result] != '\n': inc result
 
+proc wrappedInputLines(text: string, contentWidth: int,
+                      prefix, continuationPrefix: string): seq[WrappedInputLine] =
+  let width = max(1, contentWidth)
+  var lineStart = 0
+  var sourceLine = 0
+  while true:
+    let lineEnd = lineEndByte(text, lineStart)
+    var position = lineStart
+    var column = 0
+    var firstSegment = true
+    if position == lineEnd:
+      result.add WrappedInputLine(sourceLine: sourceLine, firstSegment: true)
+    while position < lineEnd:
+      let segmentStart = position
+      let segmentColumn = column
+      let prefixWidth = if sourceLine == 0 and firstSegment:
+        prefix.runeLen else: continuationPrefix.runeLen
+      let segmentWidth = max(1, width - prefixWidth)
+      var count = 0
+      while position < lineEnd and count < segmentWidth:
+        var next = position
+        var rune: Rune
+        fastRuneAt(text, next, rune)
+        position = next
+        inc count
+      result.add WrappedInputLine(text: text[segmentStart ..< position],
+        sourceLine: sourceLine, startColumn: segmentColumn,
+        endColumn: segmentColumn + count, firstSegment: firstSegment)
+      column += count
+      firstSegment = false
+      if position == lineEnd and count == segmentWidth:
+        result.add WrappedInputLine(sourceLine: sourceLine,
+          startColumn: column, endColumn: column, firstSegment: false)
+    if lineEnd >= text.len: break
+    lineStart = lineEnd + 1
+    inc sourceLine
+
+proc visualLineCount*(widget: InputWidget, contentWidth: int): int =
+  widget.text.wrappedInputLines(contentWidth, widget.prefix,
+    widget.continuationPrefix).len
+
 proc moveVertical(widget: InputWidget, delta: int) =
   let lines = widget.text.inputLines
   let current = cursorLocation(widget.text, widget.cursor)
@@ -215,40 +263,59 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
   for row in widget.area.y ..< widget.area.y + widget.area.h:
     for col in widget.area.x ..< widget.area.x + widget.area.w:
       canvas.setCell(col, row, Cell(glyph: Rune(32), style: widget.style))
-  let lines = widget.text.inputLines
-  let cursor = cursorLocation(widget.text, widget.cursor)
   let contentX = widget.area.x + max(0, widget.paddingLeft)
   let contentWidth = max(0, widget.area.w - max(0, widget.paddingLeft) -
     max(0, widget.paddingRight))
+  let lines = widget.text.wrappedInputLines(contentWidth, widget.prefix,
+    widget.continuationPrefix)
+  let cursor = cursorLocation(widget.text, widget.cursor)
   let contentY = widget.area.y + max(0, widget.paddingTop)
   let contentBottom = widget.area.y + widget.area.h - max(0, widget.paddingBottom)
   let visibleRows = max(1, contentBottom - contentY)
+  var cursorVisualLine = -1
+  var cursorVisualColumn = 0
+  for i, line in lines:
+    if line.sourceLine != cursor.line: continue
+    let nextIsSameLine = i + 1 < lines.len and
+      lines[i + 1].sourceLine == cursor.line
+    if cursor.column >= line.startColumn and
+        (cursor.column < line.endColumn or
+         (cursor.column == line.endColumn and not nextIsSameLine)):
+      cursorVisualLine = i
+      cursorVisualColumn = cursor.column - line.startColumn
+      break
+  if cursorVisualLine < 0:
+    cursorVisualLine = max(0, lines.len - 1)
   widget.scrollOffset = clamp(widget.scrollOffset, 0,
     max(0, lines.len - visibleRows))
-  if cursor.line < widget.scrollOffset:
-    widget.scrollOffset = cursor.line
-  elif cursor.line >= widget.scrollOffset + visibleRows:
-    widget.scrollOffset = cursor.line - visibleRows + 1
+  if cursorVisualLine < widget.scrollOffset:
+    widget.scrollOffset = cursorVisualLine
+  elif cursorVisualLine >= widget.scrollOffset + visibleRows:
+    widget.scrollOffset = cursorVisualLine - visibleRows + 1
   for rowIndex in 0 ..< visibleRows:
     let lineIndex = widget.scrollOffset + rowIndex
     if lineIndex >= lines.len: break
     let line = lines[lineIndex]
-    let prefix = if lineIndex == 0: widget.prefix else: widget.continuationPrefix
+    let prefix = if line.firstSegment and line.sourceLine == 0:
+      widget.prefix else: widget.continuationPrefix
     let row = contentY + rowIndex
-    if lineIndex != cursor.line:
-      canvas.writeText(contentX, row, prefix & line, widget.style, contentWidth)
+    if lineIndex != cursorVisualLine:
+      canvas.writeText(contentX, row, prefix & line.text, widget.style,
+        contentWidth)
       continue
-    let cursorByte = byteAtColumn(line, cursor.column)
-    let cursorX = contentX + prefix.runeLen + cursor.column
-    canvas.writeText(contentX, row, prefix & line[0 ..< cursorByte],
+    let cursorByte = byteAtColumn(line.text, cursorVisualColumn)
+    let cursorX = contentX + prefix.runeLen + cursorVisualColumn
+    canvas.writeText(contentX, row, prefix & line.text[0 ..< cursorByte],
       widget.style, contentWidth)
-    let cursorEnd = if cursorByte < line.len: nextPosition(line, cursorByte)
+    let cursorEnd = if cursorByte < line.text.len: nextPosition(line.text, cursorByte)
                     else: cursorByte
-    let cursorText = if cursorByte < line.len: line[cursorByte ..< cursorEnd]
-                     else: "▌"
-    let cursorPaintStyle = if cursorByte < line.len: widget.cursorStyle
+    let cursorText = if cursorByte < line.text.len:
+      line.text[cursorByte ..< cursorEnd]
+    else:
+      "▌"
+    let cursorPaintStyle = if cursorByte < line.text.len: widget.cursorStyle
                            else: widget.cursorBarStyle
     canvas.writeText(cursorX, row, cursorText, cursorPaintStyle, 1)
-    if cursorEnd < line.len:
-      canvas.writeText(cursorX + 1, row, line[cursorEnd .. ^1], widget.style,
+    if cursorEnd < line.text.len:
+      canvas.writeText(cursorX + 1, row, line.text[cursorEnd .. ^1], widget.style,
         max(0, contentX + contentWidth - cursorX - 1))

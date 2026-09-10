@@ -1,6 +1,7 @@
 ## ANSI-aware string walking, wrapping, and slicing for the TUI.
 
 from std/unicode import Rune, fastRuneAt
+import std/strutils
 
 proc skipAnsi*(s: string, i: var int): bool =
   ## If `s[i]` starts an ANSI sequence, advance `i` past it and return true.
@@ -39,3 +40,39 @@ proc ansiVisibleWidth*(s: string): int =
     var r: Rune
     fastRuneAt(s, i, r)
     inc result
+
+proc wrapAnsi*(s: string, width: int): seq[string] =
+  ## Hard-wrap ANSI text without counting escape sequences as columns.
+  if width <= 0: return @[s]
+  var line = ""
+  var active = ""
+  var column = 0
+  var i = 0
+  while i < s.len:
+    if s[i] == '\e':
+      let start = i
+      if skipAnsi(s, i):
+        let code = s[start ..< i]
+        line.add code
+        if code == "\e[0m" or code == "\e[m":
+          active = ""
+        elif code.startsWith("\e[") and code.endsWith("m"):
+          active.add code
+        continue
+    var rune: Rune
+    let start = i
+    fastRuneAt(s, i, rune)
+    if rune.int == 10:
+      result.add line
+      line = active
+      column = 0
+      continue
+    if column >= width:
+      if active.len > 0: line.add "\e[0m"
+      result.add line
+      line = active
+      column = 0
+    line.add s[start ..< i]
+    inc column
+  if line.len > 0 or result.len == 0:
+    result.add line

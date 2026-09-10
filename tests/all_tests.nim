@@ -174,6 +174,37 @@ suite "core canvas and app":
     discard input.handle(UiEvent(kind: uiKey, key: keyDown))
     check input.cursor == 7
 
+  test "question selects options and accepts free text":
+    let question = newQuestion("Choose a mode", @[
+      QuestionOption(label: "Plan"), QuestionOption(label: "Act")])
+    var answer: QuestionAnswer
+    question.onAnswer = proc (value: QuestionAnswer) = answer = value
+    discard question.handle(UiEvent(kind: uiKey, key: keyDown))
+    discard question.handle(UiEvent(kind: uiKey, key: keyEnter))
+    check answer.selected == 1
+    check answer.text == "Act"
+    let other = newQuestion("Choose a mode", @[
+      QuestionOption(label: "Plan")])
+    other.selected = 1
+    discard other.handle(UiEvent(kind: uiKey, key: keyChar, text: "custom"))
+    discard other.handle(UiEvent(kind: uiKey, key: keyEnter))
+    check other.freeText.text == "custom"
+
+  test "question escape cancels without an answer":
+    let question = newQuestion("Continue?", @[QuestionOption(label: "Yes")])
+    var answer: QuestionAnswer
+    question.onAnswer = proc (value: QuestionAnswer) = answer = value
+    discard question.handle(UiEvent(kind: uiKey, key: keyEscape))
+    check answer.cancelled
+
+  test "question paints radio buttons":
+    let question = newQuestion("Choose", @[QuestionOption(label: "one"),
+      QuestionOption(label: "two")])
+    var canvas = newCanvas(size(20, 6))
+    question.render(canvas, rect(0, 0, 20, 6))
+    check "◉ one" in canvas.plainText
+    check "○ two" in canvas.plainText
+
 suite "transcript":
   test "reduces a streamed agent turn into stable items":
     var transcript = newTranscript()
@@ -224,6 +255,16 @@ suite "transcript":
       lines: @[DiffLine(kind: dlAdded, text: "new")]))
     diff.render(canvas, rect(0, 8, 20, 3))
     check "+ new" in canvas.plainText
+
+  test "transcript selection tolerates empty and unicode rows":
+    var transcript = newTranscript()
+    transcript.appendUser("hello")
+    let view = newTranscriptWidget(transcript)
+    view.selectionStart = 0
+    view.selectionEnd = 2
+    view.selectionStartCol = 0
+    view.selectionEndCol = 10
+    check "hello" in view.selectedText()
 
   test "resolves a generic approval callback from the transcript":
     var allowed = -1

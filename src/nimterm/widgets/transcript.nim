@@ -1,7 +1,7 @@
 ## Compact transcript widget backed by nimterm's retained event reducer.
 
 import std/strutils
-from std/unicode import Rune
+from std/unicode import Rune, fastRuneAt, runeLenAt
 import ../canvas
 import ../ansi
 import ../events
@@ -25,7 +25,13 @@ type
     thinkingRailStyle*: Style
     toolRailStyle*: Style
     errorRailStyle*: Style
+    selectionStyle*: Style
     scrollOffset*: int
+    selectionStart*: int
+    selectionEnd*: int
+    selectionStartCol*: int
+    selectionEndCol*: int
+    onCopy*: proc (text: string) {.closure.}
 
   TranscriptLine = object
     text: string
@@ -40,7 +46,8 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           errorStyle = defaultStyle()): TranscriptWidget =
   TranscriptWidget(transcript: transcript, userStyle: userStyle,
     assistantStyle: assistantStyle, thinkingStyle: thinkingStyle,
-    toolStyle: toolStyle, errorStyle: errorStyle)
+    toolStyle: toolStyle, errorStyle: errorStyle, selectionStart: -1,
+    selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
 
 proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
   case item.kind
@@ -106,6 +113,81 @@ proc allLines(widget: TranscriptWidget): seq[TranscriptLine] =
         railStyle: railStyle)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
 
+proc visibleStart(widget: TranscriptWidget): int =
+  max(0, widget.allLines.len - widget.area.h - widget.scrollOffset)
+
+proc selectionColumns(widget: TranscriptWidget, line: int): tuple[lo, hi: int] =
+  result = (-1, -1)
+  if widget.selectionStart < 0 or widget.selectionEnd < 0: return
+  let startLine = widget.selectionStart
+  let endLine = widget.selectionEnd
+  let startCol = widget.selectionStartCol
+  let endCol = widget.selectionEndCol
+  if startLine == endLine:
+    if line == startLine: result = (min(startCol, endCol), max(startCol, endCol))
+  elif startLine < endLine:
+    if line == startLine: result = (startCol, widget.area.w - 1)
+    elif line == endLine: result = (0, endCol)
+    elif line > startLine and line < endLine: result = (0, widget.area.w - 1)
+  elif line == startLine:
+    result = (startCol, widget.area.w - 1)
+  elif line == endLine:
+    result = (0, endCol)
+  elif line < startLine and line > endLine:
+    result = (0, widget.area.w - 1)
+
+proc runeSlice(text: string, first, last: int): string =
+  if first > last: return
+  var i = 0
+  var column = 0
+  while i < text.len:
+    var rune: Rune
+    fastRuneAt(text, i, rune, doInc = false)
+    let width = runeLenAt(text, i)
+    if column >= first and column <= last:
+      let stop = min(text.len, i + width)
+      if stop > i: result.add text[i ..< stop]
+    i = min(text.len, i + width)
+    inc column
+
+proc lineSelected(widget: TranscriptWidget, index: int): bool =
+  let bounds = widget.selectionColumns(index)
+  bounds.lo >= 0
+
+proc selectedText*(widget: TranscriptWidget): string =
+  let lines = widget.allLines
+  if widget.selectionStart < 0 or widget.selectionEnd < 0 or lines.len == 0:
+    return ""
+  let first = max(0, min(widget.selectionStart, widget.selectionEnd))
+  let last = min(lines.high, max(widget.selectionStart, widget.selectionEnd))
+  for i in first .. last:
+    var line = stripAnsi(lines[i].text)
+    var prefixColumns = 0
+    let railPrefix = "│ "
+    let statusPrefix = "· "
+    if line.startsWith(railPrefix):
+      line = if line.len > railPrefix.len: line[railPrefix.len .. ^1] else: ""
+      prefixColumns = 2
+    elif line == "│":
+      line = ""
+      prefixColumns = 1
+    elif line.startsWith(statusPrefix):
+      line = if line.len > statusPrefix.len: line[statusPrefix.len .. ^1] else: ""
+      prefixColumns = 2
+    let bounds = widget.selectionColumns(i)
+    let firstColumn = max(0, bounds.lo - prefixColumns)
+    let lastColumn = bounds.hi - prefixColumns
+    let selected = runeSlice(line, firstColumn, lastColumn)
+    if selected.len == 0: continue
+    if result.len > 0: result.add '\n'
+    result.add selected
+
+proc copySelection*(widget: TranscriptWidget): bool =
+  let text = widget.selectedText()
+  if text.len == 0 or widget.onCopy.isNil: return false
+  widget.onCopy(text)
+  true
+
 proc maxScroll(widget: TranscriptWidget): int =
   max(0, widget.allLines.len - widget.area.h)
 
@@ -156,8 +238,35 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
     else:
       return eventIgnored
   of uiMouse:
-    if event.scrollDelta == 0: return eventIgnored
-    widget.scrollBy(event.scrollDelta)
+    if event.scrollDelta != 0:
+      widget.scrollBy(event.scrollDelta)
+      return eventHandled
+    if not widget.area.contains(event.x, event.y): return eventIgnored
+    let line = widget.visibleStart + event.y - widget.area.y
+    if line < 0 or line >= widget.allLines.len: return eventIgnored
+    case event.mouse
+    of umPress:
+      widget.selectionStart = line
+      widget.selectionEnd = line
+      widget.selectionStartCol = clamp(event.x - widget.area.x, 0,
+        max(0, widget.area.w - 1))
+      widget.selectionEndCol = widget.selectionStartCol
+      return eventHandled
+    of umDrag:
+      if widget.selectionStart >= 0:
+        widget.selectionEnd = line
+        widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
+          max(0, widget.area.w - 1))
+        return eventHandled
+    of umRelease:
+      if widget.selectionStart >= 0:
+        widget.selectionEnd = line
+        widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
+          max(0, widget.area.w - 1))
+        discard widget.copySelection()
+        return eventHandled
+    else:
+      discard
   else:
     return eventIgnored
   eventHandled
@@ -173,21 +282,29 @@ method measure*(widget: TranscriptWidget, constraints: Constraints): Size =
 
 method paint*(widget: TranscriptWidget, canvas: var Canvas) =
   let lines = widget.allLines
-  let start = max(0, lines.len - widget.area.h - widget.scrollOffset)
+  let start = widget.visibleStart
   var y = widget.area.y
   for i in start ..< lines.len:
     if y >= widget.area.y + widget.area.h: return
+    let lineStyle = lines[i].style
+    let railStyle = lines[i].railStyle
     for x in widget.area.x ..< widget.area.x + widget.area.w:
-      canvas.setCell(x, y, Cell(glyph: Rune(32), style: lines[i].style))
+      canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
     let line = lines[i]
     if line.text.startsWith("▌") or line.text.startsWith("│"):
       let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
       let rail = line.text[0 ..< railLen]
       let body = if line.text.len > railLen: line.text[railLen .. ^1] else: ""
-      canvas.writeText(widget.area.x, y, rail, line.railStyle, 1)
-      canvas.writeAnsiText(widget.area.x + 1, y, body, line.style,
+      canvas.writeText(widget.area.x, y, rail, railStyle, 1)
+      canvas.writeAnsiText(widget.area.x + 1, y, body, lineStyle,
         max(0, widget.area.w - 1))
     else:
-      canvas.writeAnsiText(widget.area.x, y, line.text, line.style,
+      canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle,
         widget.area.w)
+    let bounds = widget.selectionColumns(i)
+    if bounds.lo >= 0:
+      for x in max(0, bounds.lo) .. min(widget.area.w - 1, bounds.hi):
+        var cell = canvas.getCell(widget.area.x + x, y)
+        cell.style = widget.selectionStyle
+        canvas.setCell(widget.area.x + x, y, cell)
     inc y

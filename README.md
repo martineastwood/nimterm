@@ -8,7 +8,7 @@ The library currently provides:
 - a backend contract and deterministic widget application loop;
 - generic UI events plus an agent lifecycle event vocabulary;
 - a retained transcript reducer for streamed turns;
-- `Text`, `Panel`, `Input`, and `Menu` widgets;
+- `Text`, `Panel`, `Input`, `Menu`, and multiple-choice `Question` widgets;
 - ANSI-aware text layout, terminal input/control, themes, and Markdown.
 
 nimterm does not depend on nimgent. Applications can adapt any agent or event

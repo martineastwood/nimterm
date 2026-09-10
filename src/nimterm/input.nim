@@ -138,6 +138,33 @@ proc isModifiedPaste*(seq: string): bool =
   let bits = mods - 1
   bits > 0 and (bits and (4 or 8)) != 0  # ctrl and/or cmd/meta
 
+proc isModifiedCopy(seq: string): bool =
+  ## Ctrl/Cmd+Shift+C as xterm modifyOtherKeys or CSI-u.
+  var code, mods = 0
+  if seq.startsWith("27;") and seq.endsWith("~"):
+    let parts = seq[3 ..< seq.len - 1].split(';')
+    if parts.len != 2: return false
+    try:
+      mods = parseInt(parts[0])
+      code = parseInt(parts[1])
+    except ValueError:
+      return false
+  elif seq.endsWith("u") and ';' in seq:
+    let parts = seq[0 ..< seq.len - 1].split(';')
+    if parts.len != 2: return false
+    try:
+      code = parseInt(parts[0])
+      mods = parseInt(parts[1])
+    except ValueError:
+      return false
+  else:
+    return false
+  if code notin {67, 99}: return false
+  let bits = mods - 1
+  let commandCopy = (bits and 8) != 0 and (bits and 4) == 0
+  let ctrlShiftCopy = (bits and 4) != 0 and (bits and 1) != 0
+  commandCopy or ctrlShiftCopy
+
 proc readBracketedPaste(): InputEvent =
   ## Bytes between ESC [ 200 ~ and ESC [ 201 ~.
   var acc = ""
@@ -236,6 +263,8 @@ proc readEscapeSequence(): InputEvent =
       result.key = keyShiftTab
     elif isModifiedPaste(seq):
       result.key = keyCtrlV
+    elif isModifiedCopy(seq):
+      result.key = keyCopy
     elif seq == "200~":
       return readBracketedPaste()
     elif seq == "3~": result.key = keyDelete

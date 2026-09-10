@@ -26,6 +26,7 @@ type
     keyCtrlP
     keyCtrlU
     keyCtrlV
+    keyCopy         ## copy the selected transcript text
     keyAltB
     keyAltF
     keyTab

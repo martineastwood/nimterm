@@ -6,7 +6,9 @@
 when defined(windows):
   {.error: "nimterm does not support native Windows; use WSL.".}
 
-import std/[os, posix, strutils, terminal]
+import std/[base64, os, posix, strutils, terminal]
+when defined(macosx):
+  import std/osproc
 import posix/termios
 
 type
@@ -40,6 +42,13 @@ proc termHeight*(): int =
 
 proc termWrite(s: string) =
   stdout.write(s)
+
+proc copyToClipboard*(text: string) =
+  if not gTermActive: return
+  termWrite("\e]52;c;" & encode(text) & "\a")
+  stdout.flushFile()
+  when defined(macosx):
+    discard execCmdEx("pbcopy", input = text)
 
 proc hideCursor() =
   termWrite("\e[?25l")

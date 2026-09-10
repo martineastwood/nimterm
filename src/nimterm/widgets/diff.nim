@@ -1,5 +1,6 @@
 ## Generic diff document and renderer.
 
+import std/[json, strutils]
 import ../canvas
 import ../geometry
 import ../style
@@ -36,6 +37,36 @@ proc newDiffCard*(document: DiffDocument, contextStyle = defaultStyle(),
                   headerStyle = defaultStyle()): DiffCard =
   DiffCard(document: document, contextStyle: contextStyle,
     addedStyle: addedStyle, removedStyle: removedStyle, headerStyle: headerStyle)
+
+proc toolDiffDocument*(name: string, input: JsonNode): DiffDocument =
+  ## Build the small diff shown for successful edit/write tool cards.
+  if input.isNil or input.kind != JObject or name notin ["edit", "write"]:
+    return
+  result.path = input.getOrDefault("path").getStr
+  if name == "write":
+    for line in input.getOrDefault("content").getStr.splitLines:
+      result.lines.add DiffLine(kind: dlAdded, newNumber: result.lines.len + 1,
+        text: line)
+  else:
+    var replacements: seq[tuple[oldText, newText: string]]
+    let many = input.getOrDefault("replacements")
+    if not many.isNil and many.kind == JArray:
+      for replacement in many:
+        replacements.add (replacement.getOrDefault("old_text").getStr,
+          replacement.getOrDefault("new_text").getStr)
+    elif "old_text" in input:
+      replacements.add (input["old_text"].getStr,
+        input.getOrDefault("new_text").getStr)
+    for replacement in replacements:
+      for line in replacement.oldText.splitLines:
+        result.lines.add DiffLine(kind: dlRemoved, oldNumber: result.removals + 1,
+          text: line)
+        inc result.removals
+      for line in replacement.newText.splitLines:
+        result.lines.add DiffLine(kind: dlAdded, newNumber: result.additions + 1,
+          text: line)
+        inc result.additions
+  if name == "write": result.additions = result.lines.len
 
 proc diffPrefix(line: DiffLine): string =
   case line.kind

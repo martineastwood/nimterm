@@ -165,6 +165,29 @@ proc isModifiedCopy(seq: string): bool =
   let ctrlShiftCopy = (bits and 4) != 0 and (bits and 1) != 0
   commandCopy or ctrlShiftCopy
 
+proc modifiedCtrlO(seq: string): bool =
+  ## Ctrl-O under kitty keyboard / modifyOtherKeys.
+  var code, mods = 0
+  if seq.startsWith("27;") and seq.endsWith("~"):
+    let parts = seq[3 ..< seq.len - 1].split(';')
+    if parts.len != 2: return false
+    try:
+      mods = parseInt(parts[0])
+      code = parseInt(parts[1])
+    except ValueError:
+      return false
+  elif seq.endsWith("u") and ';' in seq:
+    let parts = seq[0 ..< seq.len - 1].split(';')
+    if parts.len != 2: return false
+    try:
+      code = parseInt(parts[0])
+      mods = parseInt(parts[1])
+    except ValueError:
+      return false
+  else:
+    return false
+  code == ord('o') and ((mods - 1) and 4) != 0
+
 proc readBracketedPaste(): InputEvent =
   ## Bytes between ESC [ 200 ~ and ESC [ 201 ~.
   var acc = ""
@@ -265,6 +288,8 @@ proc readEscapeSequence(): InputEvent =
       result.key = keyCtrlV
     elif isModifiedCopy(seq):
       result.key = keyCopy
+    elif modifiedCtrlO(seq):
+      result.key = keyCtrlO
     elif seq == "200~":
       return readBracketedPaste()
     elif seq == "3~": result.key = keyDelete

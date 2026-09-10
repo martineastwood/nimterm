@@ -119,8 +119,11 @@ proc termInit*() =
   if tcGetAttr(STDIN_FILENO, gOldTermios.addr) != 0:
     raise newException(TermError, "tcgetattr failed")
   gRawTermios = gOldTermios
-  # Raw-ish: no echo/canonical; disable ISIG so Ctrl-C arrives as byte 3.
-  gRawTermios.c_lflag = gRawTermios.c_lflag and not Cflag(ICANON or ECHO or ISIG)
+  # Raw-ish: no echo/canonical/extended processing; disable ISIG so Ctrl-C
+  # arrives as byte 3 and Ctrl-O is not consumed by VDISCARD.
+  gRawTermios.c_lflag = gRawTermios.c_lflag and
+    not Cflag(ICANON or ECHO or ISIG or IEXTEN)
+  gRawTermios.c_iflag = gRawTermios.c_iflag and not Cflag(IXON or IXOFF)
   gRawTermios.c_cc[VMIN] = 0.char
   gRawTermios.c_cc[VTIME] = 0.char
   if tcSetAttr(STDIN_FILENO, TCSANOW, gRawTermios.addr) != 0:

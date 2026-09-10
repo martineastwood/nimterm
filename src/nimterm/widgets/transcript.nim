@@ -11,6 +11,7 @@ import ../markdown as markdown_renderer
 import ../style
 import ../transcript as transcript_model
 import ../widget
+import ./diff
 
 type
   TranscriptWidget* = ref object of Widget
@@ -78,6 +79,25 @@ proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
     for line in item.text.splitLines: result.add "│ " & line
   of tikTool:
     result.add "│ " & (if item.isError: "✗ " else: "● ") & item.title
+    let document = if not item.pending and not item.isError:
+      toolDiffDocument(item.title, item.toolInput)
+    else:
+      DiffDocument()
+    if document.lines.len > 0:
+      result.add "│   " & document.path
+      let shownDiff = if item.expanded: document.lines.len else:
+        min(2, document.lines.len)
+      for i in 0 ..< shownDiff:
+        let line = document.lines[i]
+        let prefix = case line.kind
+          of dlRemoved: "- "
+          of dlAdded: "+ "
+          of dlContext: "  "
+          of dlHeader: "@@ "
+        result.add "│   " & prefix & line.text
+      if not item.expanded and document.lines.len > shownDiff:
+        result.add "│   … " & $(document.lines.len - shownDiff) &
+          " diff lines (Ctrl-O)"
     let lines = item.text.splitLines
     let shown = if item.expanded: lines.len else: min(2, lines.len)
     for i in 0 ..< shown: result.add "│   " & lines[i]
@@ -288,12 +308,22 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
       var expandable = false
       var expand = false
       for item in widget.transcript.items:
-        if item.kind == tikTool and item.text.splitLines.len > 2:
+        let document = if item.kind == tikTool and not item.isError:
+          toolDiffDocument(item.title, item.toolInput)
+        else:
+          DiffDocument()
+        if item.kind == tikTool and (item.text.splitLines.len > 2 or
+            document.lines.len > 2):
           expandable = true
           if not item.expanded: expand = true
       if not expandable: return eventIgnored
       for item in widget.transcript.items.mitems:
-        if item.kind == tikTool and item.text.splitLines.len > 2:
+        let document = if item.kind == tikTool and not item.isError:
+          toolDiffDocument(item.title, item.toolInput)
+        else:
+          DiffDocument()
+        if item.kind == tikTool and (item.text.splitLines.len > 2 or
+            document.lines.len > 2):
           item.expanded = expand
       widget.scrollOffset = 0
       return eventHandled

@@ -329,6 +329,17 @@ suite "transcript":
     check allowed == 0
     check not view.awaitingApproval
 
+  test "enter approves a tool once":
+    var allowed = -1
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-enter",
+      toolName: "bash")
+    view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-enter",
+      approve: proc (value: bool) = allowed = if value: 1 else: 0)
+    check view.handle(UiEvent(kind: uiKey, key: keyEnter)) == eventHandled
+    check allowed == 1
+    check not view.awaitingApproval
+
   test "collapses and expands long tool output":
     let view = newTranscriptWidget()
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-1",
@@ -342,3 +353,36 @@ suite "transcript":
     canvas.clear()
     view.render(canvas, rect(0, 0, 30, 5))
     check "three" in canvas.plainText
+
+  test "renders edit tool diffs in the completed tool card":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-edit",
+      toolName: "edit", toolInput: %*{
+        "path": "src/main.nim",
+        "old_text": "old line",
+        "new_text": "new line"
+      })
+    view.apply AgentUiEvent(kind: ueToolResult, toolId: "call-edit",
+      toolOutput: "OK — src/main.nim")
+    var canvas = newCanvas(size(40, 10))
+    view.render(canvas, rect(0, 0, 40, 10))
+    check "src/main.nim" in canvas.plainText
+    check "- old line" in canvas.plainText
+    check "+ new line" in canvas.plainText
+
+  test "Ctrl-O expands collapsed tool diffs":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-write",
+      toolName: "write", toolInput: %*{
+        "path": "new.txt",
+        "content": "one\ntwo\nthree"
+      })
+    view.apply AgentUiEvent(kind: ueToolResult, toolId: "call-write",
+      toolOutput: "OK")
+    var canvas = newCanvas(size(30, 10))
+    view.render(canvas, rect(0, 0, 30, 10))
+    check "diff lines (Ctrl-O)" in canvas.plainText
+    check view.handle(UiEvent(kind: uiKey, key: keyCtrlO)) == eventHandled
+    canvas.clear()
+    view.render(canvas, rect(0, 0, 30, 10))
+    check "+ three" in canvas.plainText

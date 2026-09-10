@@ -46,6 +46,8 @@ proc newQuestion*(prompt: string, options: seq[QuestionOption],
     hintStyle: hintStyle, freeText: newInput(prefix = "  > ", style = style,
       cursorStyle = cursorStyle, cursorBarStyle = cursorStyle))
 
+method focusable*(widget: QuestionWidget): bool = not widget.resolved
+
 proc optionCount(widget: QuestionWidget): int =
   widget.options.len + (if widget.allowFreeText: 1 else: 0)
 

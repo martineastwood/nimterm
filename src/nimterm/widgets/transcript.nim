@@ -52,6 +52,8 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
     toolStyle: toolStyle, errorStyle: errorStyle, selectionStart: -1,
     selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
 
+method focusable*(widget: TranscriptWidget): bool = true
+
 proc itemLines(widget: TranscriptWidget,
                item: transcript_model.TranscriptItem): seq[string] =
   case item.kind

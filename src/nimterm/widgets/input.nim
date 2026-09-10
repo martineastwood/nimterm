@@ -43,6 +43,8 @@ proc newInput*(prefix = "> ", continuationPrefix = "  ",
   InputWidget(prefix: prefix, continuationPrefix: continuationPrefix,
     style: style, cursorStyle: cursorStyle, cursorBarStyle: cursorBarStyle)
 
+method focusable*(widget: InputWidget): bool = true
+
 proc previousPosition(text: string, position: int): int =
   result = min(max(position, 0), text.len)
   if result == 0: return

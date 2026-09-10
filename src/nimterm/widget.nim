@@ -12,6 +12,10 @@ type
   Widget* = ref object of RootObj
     area*: Rect
 
+method children*(widget: Widget): seq[Widget] {.base.} = @[]
+
+method focusable*(widget: Widget): bool {.base.} = false
+
 method measure*(widget: Widget, constraints: Constraints): Size {.base.} =
   constraints.minSize
 
@@ -28,3 +32,8 @@ proc render*(widget: Widget, canvas: var Canvas, area: Rect) =
   if widget.isNil: return
   widget.layout(area)
   widget.paint(canvas)
+
+proc contains*(widget: Widget, target: Widget): bool =
+  if widget == target: return true
+  for child in widget.children:
+    if child.contains(target): return true

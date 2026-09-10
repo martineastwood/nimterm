@@ -39,6 +39,8 @@ proc newMenu*(items: seq[MenuItem], style = defaultStyle(),
     selectedDescriptionStyle: selectedDescriptionStyle,
     borderStyle: borderStyle, titleStyle: titleStyle)
 
+method focusable*(widget: Menu): bool = widget.items.len > 0
+
 method measure*(widget: Menu, constraints: Constraints): Size =
   var width = 0
   for item in widget.items:

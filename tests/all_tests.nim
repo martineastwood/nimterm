@@ -74,6 +74,27 @@ method readEvent(backend: FakeBackend, timeoutMs: int): UiEvent =
 method present(backend: FakeBackend, frame: Canvas) =
   backend.presented = frame
 
+type Probe = ref object of Widget
+  kids: seq[Widget]
+  canFocus: bool
+  handleKeys: bool
+  handleMouse: bool
+  keysSeen: int
+  mouseSeen: int
+
+method children(widget: Probe): seq[Widget] = widget.kids
+method focusable(widget: Probe): bool = widget.canFocus
+method handle(widget: Probe, event: UiEvent): EventResult =
+  if event.kind == uiKey:
+    inc widget.keysSeen
+    return if widget.handleKeys: eventHandled else: eventIgnored
+  if event.kind == uiMouse:
+    inc widget.mouseSeen
+    return if widget.handleMouse: eventHandled else: eventIgnored
+  eventIgnored
+method paint(widget: Probe, canvas: var Canvas) =
+  for child in widget.kids: child.render(canvas, widget.area)
+
 suite "core canvas and app":
   test "constructs the POSIX backend without entering raw mode":
     check not newPosixBackend().isNil
@@ -105,12 +126,42 @@ suite "core canvas and app":
       kind: ueTextDelta, text: "hello"))])
     var app = newApp(backend, newText("ready"))
     var seen = ""
-    app.onEvent = proc (_: var App, event: UiEvent) =
+    app.onEvent = proc (_: var App, event: UiEvent): EventResult =
       if event.kind == uiAgent:
         seen = event.agent.text
+      eventIgnored
     check app.step()
     check seen == "hello"
     check backend.presented.plainText.startsWith("ready")
+
+  test "keyboard events bubble from focus and Tab moves focus":
+    let child = Probe(canFocus: true)
+    let sibling = Probe(canFocus: true)
+    let root = Probe(kids: @[Widget(child), Widget(sibling)], handleKeys: true)
+    var app = newApp(FakeBackend(), root)
+    app.render()
+    app.focus(child)
+    app.dispatch(UiEvent(kind: uiKey, key: keyChar, text: "x"))
+    check child.keysSeen == 1
+    check root.keysSeen == 1
+    root.handleKeys = false
+    app.dispatch(UiEvent(kind: uiKey, key: keyTab))
+    check app.focus == sibling
+
+  test "mouse uses reverse paint order and captures a drag":
+    let lower = Probe(canFocus: true, handleMouse: true)
+    let upper = Probe(canFocus: true, handleMouse: true)
+    let root = Probe(kids: @[Widget(lower), Widget(upper)])
+    var app = newApp(FakeBackend(), root)
+    app.render()
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umPress, x: 1, y: 1))
+    check upper.mouseSeen == 1
+    check lower.mouseSeen == 0
+    check app.focus == upper
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umDrag, x: 50, y: 50))
+    check upper.mouseSeen == 2
+    app.dispatch(UiEvent(kind: uiMouse, mouse: umRelease, x: 50, y: 50))
+    check app.mouseCapture.isNil
 
   test "menu changes selection and invokes selection callback":
     var selected = -1

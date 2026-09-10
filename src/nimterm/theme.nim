@@ -96,7 +96,7 @@ proc paint*(t: Theme, code, text: string): string =
   if code.len == 0 or t.reset.len == 0: return text
   code & text & t.reset
 
-proc styleFromSgr(code: string): nimstyle.Style =
+proc styleFromSgr*(code: string): nimstyle.Style =
   ## Convert a compiled theme token back into Nimterm's semantic style.
   ## Theme tokens are still serialized for the plain console path, while
   ## widgets consume semantic cells.
@@ -114,6 +114,7 @@ proc styleFromSgr(code: string): nimstyle.Style =
       of 3: result.attributes.incl nimstyle.attrItalic
       of 4: result.attributes.incl nimstyle.attrUnderline
       of 7: result.attributes.incl nimstyle.attrReverse
+      of 9: result.attributes.incl nimstyle.attrStrikethrough
       of 30 .. 37: result.foreground = nimstyle.ansi16(value - 30)
       of 90 .. 97: result.foreground = nimstyle.ansi16(value - 90 + 8)
       of 40 .. 47: result.background = nimstyle.ansi16(value - 40)

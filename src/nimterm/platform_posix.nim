@@ -39,6 +39,7 @@ proc sgr(style: Style): string =
   if attrItalic in style.attributes: params.add "3"
   if attrUnderline in style.attributes: params.add "4"
   if attrReverse in style.attributes: params.add "7"
+  if attrStrikethrough in style.attributes: params.add "9"
   let foreground = colorParams(style.foreground, false)
   let background = colorParams(style.background, true)
   if foreground.len > 0: params.add foreground
@@ -104,5 +105,8 @@ method present*(backend: PosixBackend, frame: Canvas) =
         activeStyle = cell.style
         hasStyle = true
       stdout.write(toUTF8(cell.glyph))
+      if attrStrikethrough in cell.style.attributes and cell.glyph.int != 32:
+        ## Some terminal emulators ignore SGR 9; draw a visible fallback.
+        stdout.write("\u0336")
   stdout.write("\e[0m")
   stdout.flushFile()

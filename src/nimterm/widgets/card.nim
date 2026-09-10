@@ -13,40 +13,37 @@ type
     body*: string
     style*: Style
     borderStyle*: Style
+    titleStyle*: Style
 
 proc newCard*(title, body: string, style = defaultStyle(),
-              borderStyle = defaultStyle()): Card =
-  Card(title: title, body: body, style: style, borderStyle: borderStyle)
+              borderStyle = defaultStyle(), titleStyle = defaultStyle()): Card =
+  Card(title: title, body: body, style: style, borderStyle: borderStyle,
+    titleStyle: titleStyle)
 
 method measure*(widget: Card, constraints: Constraints): Size =
   var width = widget.title.len + 4
-  var height = 2
+  var height = 1
   for line in widget.body.splitLines:
     width = max(width, line.len + 4)
     inc height
   constraints.clamp(size(width, height))
 
 method paint*(widget: Card, canvas: var Canvas) =
-  if widget.area.w < 2 or widget.area.h < 2:
+  if widget.area.w <= 0 or widget.area.h <= 0:
     return
   let right = widget.area.x + widget.area.w - 1
   let bottom = widget.area.y + widget.area.h - 1
-  for x in widget.area.x .. right:
-    canvas.setCell(x, widget.area.y, Cell(glyph: Rune(45), style: widget.borderStyle))
-    canvas.setCell(x, bottom, Cell(glyph: Rune(45), style: widget.borderStyle))
   for y in widget.area.y .. bottom:
-    canvas.setCell(widget.area.x, y, Cell(glyph: Rune(124), style: widget.borderStyle))
-    canvas.setCell(right, y, Cell(glyph: Rune(124), style: widget.borderStyle))
-  canvas.setCell(widget.area.x, widget.area.y, Cell(glyph: Rune(43), style: widget.borderStyle))
-  canvas.setCell(right, widget.area.y, Cell(glyph: Rune(43), style: widget.borderStyle))
-  canvas.setCell(widget.area.x, bottom, Cell(glyph: Rune(43), style: widget.borderStyle))
-  canvas.setCell(right, bottom, Cell(glyph: Rune(43), style: widget.borderStyle))
+    for x in widget.area.x .. right:
+      canvas.setCell(x, y, Cell(glyph: Rune(32), style: widget.style))
+  for x in widget.area.x .. right:
+    canvas.setCell(x, widget.area.y, Cell(glyph: Rune(32), style: widget.borderStyle))
   if widget.title.len > 0:
-    canvas.writeText(widget.area.x + 2, widget.area.y, widget.title,
-      widget.style, max(0, widget.area.w - 4))
+    canvas.writeText(widget.area.x + 1, widget.area.y, widget.title,
+      widget.titleStyle, max(0, widget.area.w - 2))
   var y = widget.area.y + 1
   for line in widget.body.splitLines:
-    if y >= bottom: break
-    canvas.writeText(widget.area.x + 2, y, line, widget.style,
-      max(0, widget.area.w - 4))
+    if y > bottom: break
+    canvas.writeText(widget.area.x + 1, y, line, widget.style,
+      max(0, widget.area.w - 2))
     inc y

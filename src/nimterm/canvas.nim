@@ -3,6 +3,8 @@
 from std/unicode import Rune, fastRuneAt, toUTF8
 import ./geometry
 import ./style
+import ./ansi
+import ./theme
 
 type
   Cell* = object
@@ -48,6 +50,32 @@ proc writeText*(canvas: var Canvas, x, y: int, text: string,
     if rune.int == 10:
       break
     canvas.setCell(col, y, Cell(glyph: rune, style: style))
+    inc col
+
+proc writeAnsiText*(canvas: var Canvas, x, y: int, text: string,
+                    baseStyle = defaultStyle(), maxWidth = int.high) =
+  ## Write ANSI-styled text as semantic cells, preserving the base background.
+  var col = x
+  var i = 0
+  var active = baseStyle
+  while i < text.len and col - x < maxWidth:
+    if text[i] == '\e':
+      let start = i
+      if skipAnsi(text, i):
+        let code = text[start ..< i]
+        if code == "\e[0m" or code == "\e[m":
+          active = baseStyle
+        else:
+          let overlay = styleFromSgr(code)
+          if overlay.foreground.kind != colorDefault:
+            active.foreground = overlay.foreground
+          if overlay.background.kind != colorDefault:
+            active.background = overlay.background
+          active.attributes = active.attributes + overlay.attributes
+        continue
+    var rune: Rune
+    fastRuneAt(text, i, rune)
+    canvas.setCell(col, y, Cell(glyph: rune, style: active))
     inc col
 
 proc lineText*(canvas: Canvas, y: int): string =

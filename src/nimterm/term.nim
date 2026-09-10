@@ -119,6 +119,8 @@ proc termInit*() =
   gLastW = termWidth()
   gLastH = termHeight()
   enterAltScreen()
+  ## Do not inherit a scroll region or origin mode from the previous app.
+  termWrite("\e[?6l\e[r")
   clearScreen()
   hideCursor()
   enableMouse()

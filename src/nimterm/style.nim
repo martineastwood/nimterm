@@ -20,6 +20,7 @@ type
     attrItalic
     attrUnderline
     attrReverse
+    attrStrikethrough
 
   Style* = object
     foreground*: ColorValue

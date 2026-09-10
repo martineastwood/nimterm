@@ -36,6 +36,16 @@ proc renderInline(text: string, useColor: bool): string =
           acc.add result[i + 3 ..< close]
           i = close + 3
           continue
+      if i + 1 < result.len and result[i] == '~' and result[i + 1] == '~':
+        let close = result.find("~~", i + 2)
+        if close > 0:
+          if useColor:
+            acc.add "\e[9m" & result[i + 2 ..< close] &
+              (if t.reset.len > 0: t.reset else: "\e[0m")
+          else:
+            acc.add result[i + 2 ..< close]
+          i = close + 2
+          continue
       if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
         let close = result.find("**", i + 2)
         if close > 0:
@@ -79,6 +89,12 @@ proc renderInline(text: string, useColor: bool): string =
         # Bold + italic on the heading color.
         acc.add t.italicHeading & result[i + 3 ..< close] & t.reset
         i = close + 3
+        continue
+    if i + 1 < result.len and result[i] == '~' and result[i + 1] == '~':
+      let close = result.find("~~", i + 2)
+      if close > 0:
+        acc.add "\e[9m" & result[i + 2 ..< close] & t.reset
+        i = close + 2
         continue
     if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
       let close = result.find("**", i + 2)
@@ -228,9 +244,10 @@ proc renderMarkdown*(text: string, useColor: bool): string =
     of rsCodeBlock:
       if line.startsWith("```"):
         if color:
-          rendered.add t.paint(t.dim, codeLines.join("\n"))
+          for codeLine in codeLines:
+            rendered.add t.paint(t.dim, codeLine)
         else:
-          rendered.add codeLines.join("\n")
+          rendered.add codeLines
         state = rsNormal
         codeLines = @[]
         codeLang = ""
@@ -256,9 +273,10 @@ proc renderMarkdown*(text: string, useColor: bool): string =
   # Unterminated code block
   if state == rsCodeBlock and codeLines.len > 0:
     if color:
-      rendered.add t.paint(t.dim, codeLines.join("\n"))
+      for codeLine in codeLines:
+        rendered.add t.paint(t.dim, codeLine)
     else:
-      rendered.add codeLines.join("\n")
+      rendered.add codeLines
 
   # Unterminated table
   if state == rsTable and tableRows.len > 0:

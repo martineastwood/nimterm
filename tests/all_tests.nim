@@ -15,7 +15,24 @@ suite "markdown":
     check "Heading" in rendered
     check "bold" in rendered
     check "code" in rendered
+    check "strike" in renderMarkdown("~~strike~~", false)
     check "\e" notin rendered
+
+  test "renders themed markdown into semantic cells":
+    let base = defaultStyle().withBackground(ansi256(236))
+    var canvas = newCanvas(size(40, 3))
+    canvas.writeAnsiText(0, 0, renderMarkdown("## Heading", true), base, 40)
+    check canvas.getCell(0, 0).style.foreground.kind != colorDefault
+    canvas.clear()
+    canvas.writeAnsiText(0, 0, renderMarkdown("`code`", true), base, 40)
+    check canvas.getCell(0, 0).style.foreground.kind != colorDefault
+    canvas.clear()
+    canvas.writeAnsiText(0, 0, renderMarkdown("~~strike~~", true), base, 40)
+    check attrStrikethrough in canvas.getCell(0, 0).style.attributes
+    canvas.clear()
+    let code = renderMarkdown("```nim\nlet answer = 42\n```", true).splitLines
+    canvas.writeAnsiText(0, 1, code[0], base, 40)
+    check attrDim in canvas.getCell(0, 1).style.attributes
 
 suite "themes":
   test "compiles built-in themes":
@@ -187,12 +204,15 @@ suite "transcript":
     transcript.apply AgentUiEvent(kind: ueRunStarted, runId: "run", prompt: "ignored")
     transcript.apply AgentUiEvent(kind: ueStepStarted, runId: "run", step: 0)
     transcript.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
-      text: "answer")
+    text: "answer")
     var canvas = newCanvas(size(30, 12))
     let view = newTranscriptWidget(transcript)
-    view.render(canvas, rect(0, 0, 30, 4))
-    check "hello" in canvas.plainText
-    check "answer" in canvas.plainText
+    var transcriptCanvas = newCanvas(size(30, 12))
+    view.render(transcriptCanvas, rect(0, 0, 30, 12))
+    check "hello" in transcriptCanvas.plainText
+    check "answer" in transcriptCanvas.plainText
+    check "│ You" in transcriptCanvas.plainText
+    check "│ Assistant" in transcriptCanvas.plainText
 
     let card = newCard("status", "ready")
     card.render(canvas, rect(0, 4, 15, 3))

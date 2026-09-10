@@ -31,8 +31,6 @@ type
     selectionEnd*: int
     selectionStartCol*: int
     selectionEndCol*: int
-    onCopy*: proc (text: string) {.closure.}
-    onApproval*: proc (runId, toolId, choiceId: string) {.closure.}
     toolDetails*: proc (name: string, input: JsonNode,
                         output: string): seq[string] {.closure.}
 
@@ -223,11 +221,10 @@ proc selectedText*(widget: TranscriptWidget): string =
     if result.len > 0: result.add '\n'
     result.add selected
 
-proc copySelection*(widget: TranscriptWidget): bool =
+proc copySelection*(widget: TranscriptWidget): EventResponse =
   let text = widget.selectedText()
-  if text.len == 0 or widget.onCopy.isNil: return false
-  widget.onCopy(text)
-  true
+  if text.len == 0: return eventIgnored
+  widget.actionHandled("copy", text)
 
 proc maxScroll(widget: TranscriptWidget): int =
   max(0, widget.allLines.len - widget.area.h)
@@ -253,21 +250,17 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
           if choice.key.toLowerAscii == key: selected = j
         if selected < 0: return eventIgnored
         let choice = widget.transcript.items[i].approvalChoices[selected]
-        if not widget.onApproval.isNil:
-          widget.onApproval(widget.transcript.items[i].runId,
-            widget.transcript.items[i].id, choice.id)
         widget.transcript.items[i].approvalRequired = false
-        return eventHandled
+        return widget.actionHandled("approval", choice.id,
+          targetId = widget.transcript.items[i].id)
       return eventIgnored
     of keyEscape:
       for i in countdown(widget.transcript.items.high, 0):
         if not widget.transcript.items[i].approvalRequired: continue
-        if not widget.onApproval.isNil:
-          widget.onApproval(widget.transcript.items[i].runId,
-            widget.transcript.items[i].id,
-            widget.transcript.items[i].cancelChoiceId)
+        let choiceId = widget.transcript.items[i].cancelChoiceId
         widget.transcript.items[i].approvalRequired = false
-        return eventHandled
+        return widget.actionHandled("approval", choiceId,
+          targetId = widget.transcript.items[i].id)
       return eventIgnored
     of keyCtrlO:
       var expandable = false
@@ -320,8 +313,10 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
         widget.selectionEnd = line
         widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
           max(0, widget.area.w - 1))
-        discard widget.copySelection()
-        return releaseHandled()
+        let copy = widget.copySelection()
+        result = releaseHandled()
+        result.action = copy.action
+        return
     else:
       discard
   else:

@@ -10,6 +10,7 @@ import std/[base64, os, posix, strutils, terminal]
 when defined(macosx):
   import std/osproc
 import posix/termios
+import ./backend
 
 type
   TermError* = object of CatchableError
@@ -59,42 +60,51 @@ proc showCursor() =
 proc clearScreen() =
   termWrite("\e[2J\e[H")
 
-proc enableMouse() =
+proc enableMouse(): string =
   ## Full SGR mouse like pi fullscreen: wheel scrolls our viewport; drag is
   ## app-owned selection (terminal native select cannot work under mouse
   ## tracking). 1002 reports motion while a button is held.
-  termWrite("\e[?1000h\e[?1002h\e[?1006h")
+  "\e[?1000h\e[?1002h\e[?1006h"
 
-proc disableMouse() =
-  termWrite("\e[?1006l\e[?1002l\e[?1000l\e[?1007l")
+proc disableMouse(): string = "\e[?1006l\e[?1002l\e[?1000l\e[?1007l"
 
-proc enableModifyOtherKeys() =
+proc enableModifyOtherKeys(): string =
   ## Ask the terminal to distinguish modified keys (Shift+Enter, etc.).
   ## Level 2 reports ESC [ 27 ; mod ; key ~
-  termWrite("\e[>4;2m")
+  result = "\e[>4;2m"
   ## Also request Alt-sends-ESC so Option+Enter becomes ESC CR on macOS.
-  termWrite("\e[?1036h")
+  result.add "\e[?1036h"
 
-proc enableKittyKeyboard() =
+proc enableKittyKeyboard(): string =
   ## Ask Kitty-compatible terminals to report modifier-bearing keys as CSI-u.
-  termWrite("\e[>1u")
+  "\e[>1u"
 
-proc disableModifyOtherKeys() =
-  termWrite("\e[>4;0m")
-  termWrite("\e[?1036l")
+proc disableModifyOtherKeys(): string = "\e[>4;0m\e[?1036l"
 
-proc disableKittyKeyboard() =
-  termWrite("\e[<u")
+proc disableKittyKeyboard(): string = "\e[<u"
 
-proc enableBracketedPaste() =
-  termWrite("\e[?2004h")
+proc enableBracketedPaste(): string = "\e[?2004h"
 
-proc disableBracketedPaste() =
-  termWrite("\e[?2004l")
+proc disableBracketedPaste(): string = "\e[?2004l"
+
+proc enableProtocols*(caps: TerminalCapabilities): string =
+  if caps.mouse: result.add enableMouse()
+  if caps.focusEvents: result.add "\e[?1004h"
+  if caps.kittyKeyboard: result.add enableKittyKeyboard()
+  elif caps.modifyOtherKeys: result.add enableModifyOtherKeys()
+  if caps.bracketedPaste: result.add enableBracketedPaste()
+
+proc disableProtocols*(caps: TerminalCapabilities): string =
+  if caps.bracketedPaste: result.add disableBracketedPaste()
+  if caps.kittyKeyboard: result.add disableKittyKeyboard()
+  elif caps.modifyOtherKeys: result.add disableModifyOtherKeys()
+  if caps.focusEvents: result.add "\e[?1004l"
+  if caps.mouse: result.add disableMouse()
 
 var
   gOldTermios: Termios
   gRawTermios: Termios
+  gCapabilities: TerminalCapabilities
 
 proc useAltScreen(): bool =
   let t = getEnv("TERM")
@@ -113,7 +123,7 @@ proc leaveAltScreen() =
   else:
     clearScreen()
 
-proc termInit*() =
+proc termInit*(capabilities = defaultCapabilities()) =
   if gTermActive:
     raise newException(TermError, "terminal already initialised")
   if tcGetAttr(STDIN_FILENO, gOldTermios.addr) != 0:
@@ -135,19 +145,14 @@ proc termInit*() =
   termWrite("\e[?6l\e[r")
   clearScreen()
   hideCursor()
-  enableMouse()
-  enableModifyOtherKeys()
-  enableKittyKeyboard()
-  enableBracketedPaste()
+  gCapabilities = capabilities
+  termWrite(enableProtocols(capabilities))
   gTermActive = true
   stdout.flushFile()
 
 proc termShutdown*() =
   if not gTermActive: return
-  disableBracketedPaste()
-  disableKittyKeyboard()
-  disableModifyOtherKeys()
-  disableMouse()
+  termWrite(disableProtocols(gCapabilities))
   showCursor()
   leaveAltScreen()
   discard tcSetAttr(STDIN_FILENO, TCSANOW, gOldTermios.addr)

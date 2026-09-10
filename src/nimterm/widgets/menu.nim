@@ -26,7 +26,6 @@ type
     selectedDescriptionStyle*: Style
     borderStyle*: Style
     titleStyle*: Style
-    onSelect*: proc (index: int) {.closure.}
 
 proc newMenu*(items: seq[MenuItem], style = defaultStyle(),
               selectedStyle = defaultStyle(), title = "", bordered = false,
@@ -76,7 +75,8 @@ method handle*(widget: Menu, event: UiEvent): EventResponse =
       let index = widget.scrollOffset + event.y - widget.area.y - inset
       if index >= 0 and index < widget.items.len:
         widget.selected = index
-        return focusHandled()
+        return widget.focusActionHandled("select", widget.items[index].label,
+          index)
     return eventIgnored
   if event.kind != uiKey or widget.items.len == 0:
     return eventIgnored
@@ -90,8 +90,8 @@ method handle*(widget: Menu, event: UiEvent): EventResponse =
   of keyPageDown:
     widget.moveSelection(max(1, widget.contentRows - 1))
   of keyEnter:
-    if not widget.onSelect.isNil:
-      widget.onSelect(widget.selected)
+    return widget.actionHandled("select", widget.items[widget.selected].label,
+      widget.selected)
   else:
     return eventIgnored
   eventHandled

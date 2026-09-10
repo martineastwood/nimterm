@@ -10,8 +10,10 @@ type
     requestFocus*: bool
     captureMouse*: bool
     releaseMouse*: bool
+    action*: UiAction
 
   Widget* = ref object of RootObj
+    id*: string
     area*: Rect
 
 method children*(widget: Widget): seq[Widget] {.base.} = @[]
@@ -36,6 +38,16 @@ proc captureHandled*(): EventResponse =
 
 proc releaseHandled*(): EventResponse =
   EventResponse(handled: true, releaseMouse: true)
+
+proc actionHandled*(widget: Widget, kind: string; value = "", index = -1,
+                    cancelled = false, targetId = ""): EventResponse =
+  EventResponse(handled: true, action: UiAction(sourceId: widget.id,
+    targetId: targetId, kind: kind, value: value, index: index,
+    cancelled: cancelled))
+
+proc focusActionHandled*(widget: Widget, kind: string; value = "", index = -1): EventResponse =
+  result = widget.actionHandled(kind, value, index)
+  result.requestFocus = true
 
 method measure*(widget: Widget, constraints: Constraints): Size {.base.} =
   constraints.minSize

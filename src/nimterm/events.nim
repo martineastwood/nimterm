@@ -4,6 +4,14 @@ import std/json
 import ./keys
 
 type
+  UiAction* = object
+    sourceId*: string
+    targetId*: string
+    kind*: string
+    value*: string
+    index*: int
+    cancelled*: bool
+
   ApprovalChoice* = object
     id*: string
     key*: string
@@ -51,6 +59,7 @@ type
     uiNone
     uiKey
     uiMouse
+    uiFocus
     uiResize
     uiTimer
     uiAgent
@@ -64,6 +73,7 @@ type
     y*: int
     mouse*: UiMouseKind
     scrollDelta*: int
+    focused*: bool
     width*: int
     height*: int
     timerId*: string

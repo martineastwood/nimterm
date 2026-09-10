@@ -8,11 +8,18 @@ import ./keys
 import ./term
 
 type
+  ByteReader* = proc(timeoutMs: int): int {.closure.}
+
   MouseKind* = enum
     mouseNone
     mousePress    ## left button down
     mouseRelease  ## left button up
     mouseDrag     ## motion while left button held
+
+  FocusKind* = enum
+    focusNone
+    focusIn
+    focusOut
 
   InputEvent* = object
     key*: Key
@@ -23,6 +30,7 @@ type
     mouse*: MouseKind
     mouseX*: int        ## 0-based column
     mouseY*: int        ## 0-based row
+    focus*: FocusKind
 
 proc readByteWait(ms: int): int =
   if inputPending(ms):
@@ -49,11 +57,11 @@ proc utf8SeqLen(b: int): int =
   elif (b and 0xF8) == 0xF0: 4
   else: 1
 
-proc readUtf8Text(first: int): string =
+proc readUtf8Text(first: int, readNext: ByteReader): string =
   let n = utf8SeqLen(first)
   result = $char(first)
   for _ in 2 .. n:
-    let b = readByteWait(50)
+    let b = readNext(50)
     if b < 0: return
     result.add char(b)
 
@@ -188,20 +196,20 @@ proc modifiedCtrlO(seq: string): bool =
     return false
   code == ord('o') and ((mods - 1) and 4) != 0
 
-proc readBracketedPaste(): InputEvent =
+proc readBracketedPaste(readNext: ByteReader): InputEvent =
   ## Bytes between ESC [ 200 ~ and ESC [ 201 ~.
   var acc = ""
   while true:
-    let b = readByteWait(500)
+    let b = readNext(500)
     if b < 0:
       break
     if b == 0x1b:
-      let n1 = readByteWait(50)
+      let n1 = readNext(50)
       if n1 != ord('['):
         continue
       var seq = ""
       while true:
-        let x = readByteWait(50)
+        let x = readNext(50)
         if x < 0: break
         seq.add char(x)
         if char(x) == '~': break
@@ -217,9 +225,9 @@ proc readBracketedPaste(): InputEvent =
     return
   result = charEvent(text)
 
-proc readEscapeSequence(): InputEvent =
+proc readEscapeSequence(readNext: ByteReader): InputEvent =
   ## Called after ESC has already been consumed.
-  let ch2 = readByteWait(50)
+  let ch2 = readNext(50)
   if ch2 < 0:
     result.key = keyEscape
     return
@@ -234,7 +242,7 @@ proc readEscapeSequence(): InputEvent =
     result.key = keyAltF
     return
   if ch2 == ord('O'):
-    let ch3 = readByteWait(50)
+    let ch3 = readNext(50)
     if ch3 < 0: return
     case ch3.char
     of 'A': result.key = keyUp
@@ -247,13 +255,19 @@ proc readEscapeSequence(): InputEvent =
     return
   if ch2 != ord('['):
     return
-  let ch3 = readByteWait(50)
+  let ch3 = readNext(50)
   if ch3 < 0: return
+  if ch3 == ord('I'):
+    result.focus = focusIn
+    return
+  if ch3 == ord('O'):
+    result.focus = focusOut
+    return
   # SGR mouse: ESC [ < btn ; x ; y M/m
   if ch3 == ord('<'):
     var params = ""
     while true:
-      let b = readByteWait(50)
+      let b = readNext(50)
       if b < 0: return
       if b == ord('M') or b == ord('m'):
         return parseSgrMouse(params, press = b == ord('M'))
@@ -270,7 +284,7 @@ proc readEscapeSequence(): InputEvent =
   else:
     var seq = $ch3.char
     while true:
-      let b = readByteWait(50)
+      let b = readNext(50)
       if b < 0: return
       let c = char(b)
       seq.add c
@@ -291,7 +305,7 @@ proc readEscapeSequence(): InputEvent =
     elif modifiedCtrlO(seq):
       result.key = keyCtrlO
     elif seq == "200~":
-      return readBracketedPaste()
+      return readBracketedPaste(readNext)
     elif seq == "3~": result.key = keyDelete
     elif seq == "1~" or seq == "7~": result.key = keyHome
     elif seq == "4~" or seq == "8~": result.key = keyEnd
@@ -300,29 +314,12 @@ proc readEscapeSequence(): InputEvent =
     elif seq in ["1;3D", "1;5D"]: result.key = keyAltB
     elif seq in ["1;3C", "1;5C"]: result.key = keyAltF
 
-proc readInputEvent*(timeoutMs: int): InputEvent =
-  if consumeResize():
-    result.resized = true
-    return
-
-  if not inputPending(timeoutMs):
-    if consumeResize():
-      result.resized = true
-    else:
-      result.key = keyNone
-    return
-
-  if consumeResize():
-    result.resized = true
-    if not inputPending(0):
-      return
-
-  let b = readByte()
+proc decodeInput*(b: int, readNext: ByteReader): InputEvent =
   if b < 0:
     result.key = keyNone
     return
   if b == 0x1b:
-    return readEscapeSequence()
+    return readEscapeSequence(readNext)
   # Enter is CR and/or LF depending on the terminal — both submit.
   # Newlines come only from Shift/Option+Enter or bracketed paste.
   if b == ord('\r') or b == ord('\n'):
@@ -340,5 +337,21 @@ proc readInputEvent*(timeoutMs: int): InputEvent =
   if b >= 32 and b <= 126:
     return charEvent($char(b))
   if b >= 0x80:
-    return charEvent(readUtf8Text(b))
+    return charEvent(readUtf8Text(b, readNext))
   result.key = keyNone
+
+proc readInputEvent*(timeoutMs: int): InputEvent =
+  if consumeResize():
+    result.resized = true
+    return
+
+  if not inputPending(timeoutMs):
+    if consumeResize(): result.resized = true
+    else: result.key = keyNone
+    return
+
+  if consumeResize():
+    result.resized = true
+    if not inputPending(0): return
+
+  decodeInput(readByte(), readByteWait)

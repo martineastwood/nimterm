@@ -3,7 +3,7 @@
 when defined(windows):
   {.error: "platform_posix is unavailable on Windows".}
 
-import std/strutils
+import std/[os, strutils]
 from std/unicode import toUTF8
 import ./backend
 import ./canvas
@@ -16,6 +16,7 @@ import ./term
 
 type
   PosixBackend* = ref object of TerminalBackend
+    capabilities*: TerminalCapabilities
 
 proc colorParams(color: ColorValue, background: bool): string =
   case color.kind
@@ -54,12 +55,23 @@ proc sameStyle(a, b: Style): bool =
   sameColor(a.foreground, b.foreground) and sameColor(a.background, b.background) and
     a.attributes == b.attributes
 
-proc newPosixBackend*(): TerminalBackend =
-  PosixBackend()
+proc detectTerminalCapabilities*(): TerminalCapabilities =
+  let term = getEnv("TERM").toLowerAscii
+  let program = getEnv("TERM_PROGRAM").toLowerAscii
+  if term.len == 0 or term == "dumb": return
+  result.mouse = true
+  result.bracketedPaste = true
+  result.focusEvents = true
+  result.kittyKeyboard = getEnv("KITTY_WINDOW_ID").len > 0 or
+    program in ["ghostty", "wezterm"]
+  result.modifyOtherKeys = not result.kittyKeyboard and
+    ("xterm" in term or program in ["iterm.app", "apple_terminal"])
+
+proc newPosixBackend*(capabilities = detectTerminalCapabilities()): TerminalBackend =
+  PosixBackend(capabilities: capabilities)
 
 method init*(backend: PosixBackend) =
-  discard backend
-  termInit()
+  termInit(backend.capabilities)
 
 method shutdown*(backend: PosixBackend) =
   discard backend
@@ -74,6 +86,8 @@ method readEvent*(backend: PosixBackend, timeoutMs: int): UiEvent =
   let input = readInputEvent(timeoutMs)
   if input.resized:
     return UiEvent(kind: uiResize, width: termWidth(), height: termHeight())
+  if input.focus != focusNone:
+    return UiEvent(kind: uiFocus, focused: input.focus == focusIn)
   if input.mouse != mouseNone or input.scrollDelta != 0:
     result.kind = uiMouse
     result.x = input.mouseX

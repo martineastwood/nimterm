@@ -1,8 +1,59 @@
 import std/[json, strutils, unittest]
-import nimterm/[ansi, app, backend, canvas, events, geometry, markdown, keys,
+import nimterm/[ansi, app, backend, canvas, events, geometry, input, markdown, keys,
   style, text_width, theme, transcript, widget, widgets]
+import nimterm/term
 when not defined(windows):
   import nimterm/platform_posix
+
+proc decodeBytes(bytes: string): InputEvent =
+  var index = 1
+  proc nextByte(timeoutMs: int): int =
+    discard timeoutMs
+    if index >= bytes.len: return -1
+    result = bytes[index].ord
+    inc index
+  decodeInput(if bytes.len == 0: -1 else: bytes[0].ord, nextByte)
+
+suite "terminal input decoding":
+  test "distinguishes escape from complete and partial control sequences":
+    check decodeBytes("\e").key == keyEscape
+    check decodeBytes("\e[A").key == keyUp
+    check decodeBytes("\e[").key == keyNone
+
+  test "normalizes modified key encodings":
+    check decodeBytes("\e[118;5u").key == keyCtrlV
+    check decodeBytes("\e[99;6u").key == keyCopy
+    check decodeBytes("\e[111;5u").key == keyCtrlO
+    check decodeBytes("\e[13;2u").key == keyShiftEnter
+
+  test "decodes bracketed paste as one normalized text event":
+    let event = decodeBytes("\e[200~one\r\ntwo\rthree\e[201~")
+    check event.key == keyChar
+    check event.text == "one\ntwo\nthree"
+
+  test "decodes SGR mouse press drag release and wheel":
+    let press = decodeBytes("\e[<0;3;4M")
+    check press.mouse == mousePress
+    check (press.mouseX, press.mouseY) == (2, 3)
+    check decodeBytes("\e[<32;3;4M").mouse == mouseDrag
+    check decodeBytes("\e[<0;3;4m").mouse == mouseRelease
+    check decodeBytes("\e[<65;3;4M").scrollDelta == -3
+
+  test "keeps UTF-8 bytes together and tolerates an incomplete rune":
+    check decodeBytes("界").text == "界"
+    check decodeBytes("\xE7\x95").text == "\xE7\x95"
+
+  test "decodes terminal focus reports":
+    check decodeBytes("\e[I").focus == focusIn
+    check decodeBytes("\e[O").focus == focusOut
+
+  test "enables only declared terminal protocols":
+    let basic = TerminalCapabilities(bracketedPaste: true, focusEvents: true)
+    check enableProtocols(basic) == "\e[?1004h\e[?2004h"
+    check disableProtocols(basic) == "\e[?2004l\e[?1004l"
+    let kitty = TerminalCapabilities(modifyOtherKeys: true, kittyKeyboard: true)
+    check enableProtocols(kitty) == "\e[>1u"
+    check disableProtocols(kitty) == "\e[<u"
 
 suite "ansi text":
   test "visible width ignores escapes":
@@ -128,16 +179,12 @@ suite "core canvas and app":
     check canvas.getCell(1, 0).continuation
     check canvas.getCell(2, 0).combining.len > 0
 
-  test "app poll hook can feed and stop the event loop":
-    let backend = FakeBackend()
-    var app = newApp(backend)
-    var polls = 0
-    app.pollIntervalMs = 0
-    app.onPoll = proc (running: var App) =
-      inc polls
-      running.running = false
+  test "run drains and closes event sources":
+    let source = FakeSource(events: @[quitEvent()])
+    var app = newApp(FakeBackend())
+    app.addSource(source)
     app.run()
-    check polls == 1
+    check source.closed
 
   test "event sources and timers enter the normal dispatch queue":
     let source = FakeSource(events: @[UiEvent(kind: uiAgent,
@@ -166,6 +213,20 @@ suite "core canvas and app":
     check app.step()
     check seen == "hello"
     check backend.presented.plainText.startsWith("ready")
+
+  test "app delivers inert widget actions to its controller":
+    let input = newInput()
+    input.id = "composer"
+    input.setText("hello")
+    var app = newApp(FakeBackend(), input)
+    var received: UiAction
+    app.onAction = proc (_: var App, action: UiAction) = received = action
+    app.render()
+    app.focus(input)
+    app.dispatch(UiEvent(kind: uiKey, key: keyEnter))
+    check received.sourceId == "composer"
+    check received.kind == "submit"
+    check received.value == "hello"
 
   test "keyboard events bubble from focus and Tab moves focus":
     let child = Probe(canFocus: true)
@@ -217,15 +278,14 @@ suite "core canvas and app":
     app.dispatch(UiEvent(kind: uiKey, key: keyTab))
     check app.focus == enabled
 
-  test "menu changes selection and invokes selection callback":
-    var selected = -1
+  test "menu emits selection actions":
     let menu = newMenu(@[
       MenuItem(label: "one", description: "first"),
       MenuItem(label: "two", description: "second")])
-    menu.onSelect = proc (index: int) = selected = index
     discard menu.handle(UiEvent(kind: uiKey, key: keyDown))
-    discard menu.handle(UiEvent(kind: uiKey, key: keyEnter))
-    check selected == 1
+    let response = menu.handle(UiEvent(kind: uiKey, key: keyEnter))
+    check response.action.kind == "select"
+    check response.action.index == 1
 
   test "menu keeps the selected row inside a bounded popup":
     var items: seq[MenuItem]
@@ -242,17 +302,16 @@ suite "core canvas and app":
     check menu.scrollOffset > 0
     check "item-8" in canvas.plainText
 
-  test "input edits UTF-8 and submits text":
+  test "input edits UTF-8 and emits submitted text":
     let input = newInput()
     input.insert("hé")
     check input.cursor == "hé".len
     discard input.handle(UiEvent(kind: uiKey, key: keyLeft))
     discard input.handle(UiEvent(kind: uiKey, key: keyBackspace))
     check input.text == "é"
-    var submitted = ""
-    input.onSubmit = proc (text: string) = submitted = text
-    discard input.handle(UiEvent(kind: uiKey, key: keyEnter))
-    check submitted == "é"
+    let response = input.handle(UiEvent(kind: uiKey, key: keyEnter))
+    check response.action.kind == "submit"
+    check response.action.value == "é"
 
   test "input paints a visible cursor at the end and over text":
     let inputStyle = defaultStyle().withBackground(ansi256(236))
@@ -312,12 +371,10 @@ suite "core canvas and app":
   test "question selects options and accepts free text":
     let question = newQuestion("Choose a mode", @[
       QuestionOption(label: "Plan"), QuestionOption(label: "Act")])
-    var answer: QuestionAnswer
-    question.onAnswer = proc (value: QuestionAnswer) = answer = value
     discard question.handle(UiEvent(kind: uiKey, key: keyDown))
-    discard question.handle(UiEvent(kind: uiKey, key: keyEnter))
-    check answer.selected == 1
-    check answer.text == "Act"
+    let answer = question.handle(UiEvent(kind: uiKey, key: keyEnter)).action
+    check answer.index == 1
+    check answer.value == "Act"
     let other = newQuestion("Choose a mode", @[
       QuestionOption(label: "Plan")])
     other.selected = 1
@@ -327,9 +384,7 @@ suite "core canvas and app":
 
   test "question escape cancels without an answer":
     let question = newQuestion("Continue?", @[QuestionOption(label: "Yes")])
-    var answer: QuestionAnswer
-    question.onAnswer = proc (value: QuestionAnswer) = answer = value
-    discard question.handle(UiEvent(kind: uiKey, key: keyEscape))
+    let answer = question.handle(UiEvent(kind: uiKey, key: keyEscape)).action
     check answer.cancelled
 
   test "question paints radio buttons":
@@ -431,61 +486,48 @@ suite "transcript":
     view.selectionEndCol = 10
     check "hello" in view.selectedText()
 
-  test "resolves a generic approval callback from the transcript":
-    var allowed = -1
+  test "emits a generic approval action from the transcript":
     let view = newTranscriptWidget()
-    view.onApproval = proc (runId, toolId, choiceId: string) =
-      discard runId; discard toolId
-      if choiceId == "allow": allowed = 1
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-1",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-1",
       approvalChoices: @[ApprovalChoice(id: "allow", key: "y", label: "allow")])
     let handled = view.handle(UiEvent(kind: uiKey, key: keyChar, text: "y"))
-    check handled == eventHandled
-    check allowed == 1
+    check handled.handled
+    check handled.action.value == "allow"
 
-  test "approval actions are supplied by the application":
-    var selected = ""
+  test "approval choices remain application-defined data":
     let view = newTranscriptWidget()
-    view.onApproval = proc (runId, toolId, choiceId: string) =
-      discard runId; discard toolId; selected = choiceId
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-scope",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-scope",
       approvalChoices: @[
         ApprovalChoice(id: "once", key: "enter", label: "once"),
         ApprovalChoice(id: "session", key: "s", label: "session")])
-    check view.handle(UiEvent(kind: uiKey, key: keyChar, text: "s")) == eventHandled
-    check selected == "session"
+    let response = view.handle(UiEvent(kind: uiKey, key: keyChar, text: "s"))
+    check response.handled
+    check response.action.value == "session"
 
   test "escape denies approval without exiting":
-    var allowed = -1
     let view = newTranscriptWidget()
-    view.onApproval = proc (runId, toolId, choiceId: string) =
-      discard runId; discard toolId
-      if choiceId == "deny": allowed = 0
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-escape",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-escape",
       cancelChoiceId: "deny")
     let handled = view.handle(UiEvent(kind: uiKey, key: keyEscape))
-    check handled == eventHandled
-    check allowed == 0
+    check handled.handled
+    check handled.action.value == "deny"
     check not view.awaitingApproval
 
   test "enter approves a tool once":
-    var allowed = -1
     let view = newTranscriptWidget()
-    view.onApproval = proc (runId, toolId, choiceId: string) =
-      discard runId; discard toolId
-      if choiceId == "once": allowed = 1
     view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-enter",
       toolName: "bash")
     view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-enter",
       approvalChoices: @[ApprovalChoice(id: "once", key: "enter", label: "once")])
-    check view.handle(UiEvent(kind: uiKey, key: keyEnter)) == eventHandled
-    check allowed == 1
+    let response = view.handle(UiEvent(kind: uiKey, key: keyEnter))
+    check response.handled
+    check response.action.value == "once"
     check not view.awaitingApproval
 
   test "collapses and expands long tool output":

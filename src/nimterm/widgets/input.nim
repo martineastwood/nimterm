@@ -23,8 +23,6 @@ type
     paddingTop*: int
     paddingBottom*: int
     scrollOffset*: int
-    onChange*: proc (text: string) {.closure.}
-    onSubmit*: proc (text: string) {.closure.}
 
   WrappedInputLine = object
     text: string
@@ -58,38 +56,30 @@ proc nextPosition(text: string, position: int): int =
   var rune: Rune
   fastRuneAt(text, result, rune)
 
-proc changed(widget: InputWidget) =
-  if not widget.onChange.isNil: widget.onChange(widget.text)
-
 proc clear*(widget: InputWidget) =
   widget.text = ""
   widget.cursor = 0
-  widget.changed()
 
 proc setText*(widget: InputWidget, text: string) =
   widget.text = text
   widget.cursor = text.len
-  widget.changed()
 
 proc insert*(widget: InputWidget, piece: string) =
   if piece.len == 0: return
   let p = min(max(widget.cursor, 0), widget.text.len)
   widget.text = widget.text[0 ..< p] & piece & widget.text[p .. ^1]
   widget.cursor = p + piece.len
-  widget.changed()
 
 proc deleteBefore(widget: InputWidget) =
   if widget.cursor == 0: return
   let start = previousPosition(widget.text, widget.cursor)
   widget.text = widget.text[0 ..< start] & widget.text[widget.cursor .. ^1]
   widget.cursor = start
-  widget.changed()
 
 proc deleteAfter(widget: InputWidget) =
   if widget.cursor == widget.text.len: return
   let finish = nextPosition(widget.text, widget.cursor)
   widget.text = widget.text[0 ..< widget.cursor] & widget.text[finish .. ^1]
-  widget.changed()
 
 proc wordBackward(widget: InputWidget) =
   while widget.cursor > 0:
@@ -257,10 +247,10 @@ method handle*(widget: InputWidget, event: UiEvent): EventResponse =
   of keyShiftEnter:
     widget.insert("\n")
   of keyEnter:
-    if not widget.onSubmit.isNil: widget.onSubmit(widget.text)
+    return widget.actionHandled("submit", widget.text)
   else:
     return eventIgnored
-  eventHandled
+  widget.actionHandled("change", widget.text)
 
 method measure*(widget: InputWidget, constraints: Constraints): Size =
   var width = 0

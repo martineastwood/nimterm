@@ -31,7 +31,6 @@ type
     selectedStyle*: Style
     descriptionStyle*: Style
     hintStyle*: Style
-    onAnswer*: proc (answer: QuestionAnswer) {.closure.}
     resolved: bool
 
 proc newQuestion*(prompt: string, options: seq[QuestionOption],
@@ -55,21 +54,20 @@ proc optionCount(widget: QuestionWidget): int =
 proc freeTextSelected(widget: QuestionWidget): bool =
   widget.allowFreeText and widget.selected == widget.options.len
 
-proc answer*(widget: QuestionWidget) =
-  if widget.resolved or widget.selected < 0: return
-  if widget.freeTextSelected and widget.freeText.text.strip.len == 0: return
+proc answer*(widget: QuestionWidget): EventResponse =
+  if widget.resolved or widget.selected < 0: return eventIgnored
+  if widget.freeTextSelected and widget.freeText.text.strip.len == 0:
+    return eventIgnored
   widget.resolved = true
-  if not widget.onAnswer.isNil:
-    widget.onAnswer(QuestionAnswer(
-      selected: if widget.freeTextSelected: -1 else: widget.selected,
-      text: if widget.freeTextSelected: widget.freeText.text else:
-        widget.options[widget.selected].label))
+  widget.actionHandled("answer",
+    if widget.freeTextSelected: widget.freeText.text else:
+      widget.options[widget.selected].label,
+    if widget.freeTextSelected: -1 else: widget.selected)
 
-proc cancel*(widget: QuestionWidget) =
-  if widget.resolved: return
+proc cancel*(widget: QuestionWidget): EventResponse =
+  if widget.resolved: return eventIgnored
   widget.resolved = true
-  if not widget.onAnswer.isNil:
-    widget.onAnswer(QuestionAnswer(selected: -1, cancelled: true))
+  widget.actionHandled("answer", index = -1, cancelled = true)
 
 proc moveSelection(widget: QuestionWidget, delta: int) =
   let count = widget.optionCount
@@ -90,8 +88,7 @@ method handle*(widget: QuestionWidget, event: UiEvent): EventResponse =
     return focusHandled()
   if event.kind != uiKey: return eventIgnored
   if event.key == keyEscape:
-    widget.cancel()
-    return eventHandled
+    return widget.cancel()
   if event.key == keyUp:
     widget.moveSelection(-1)
     return eventHandled
@@ -106,13 +103,11 @@ method handle*(widget: QuestionWidget, event: UiEvent): EventResponse =
       discard widget.freeText.handle(event)
       return eventHandled
     of keyEnter:
-      widget.answer()
-      return eventHandled
+      return widget.answer()
     else:
       discard
   elif event.key == keyEnter:
-    widget.answer()
-    return eventHandled
+    return widget.answer()
   eventIgnored
 
 method measure*(widget: QuestionWidget, constraints: Constraints): Size =

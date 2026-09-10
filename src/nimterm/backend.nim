@@ -5,7 +5,18 @@ import ./events
 import ./geometry
 
 type
+  TerminalCapabilities* = object
+    mouse*: bool
+    bracketedPaste*: bool
+    focusEvents*: bool
+    modifyOtherKeys*: bool
+    kittyKeyboard*: bool
+
   TerminalBackend* = ref object of RootObj
+
+proc defaultCapabilities*(): TerminalCapabilities =
+  TerminalCapabilities(mouse: true, bracketedPaste: true, focusEvents: true,
+    modifyOtherKeys: true)
 
 method init*(backend: TerminalBackend) {.base.} =
   discard

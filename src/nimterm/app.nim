@@ -34,7 +34,7 @@ type
     focus*: Widget
     mouseCapture*: Widget
     onEvent*: proc (app: var App, event: UiEvent): EventResponse {.closure.}
-    onPoll*: proc (app: var App) {.closure.}
+    onAction*: proc (app: var App, action: UiAction) {.closure.}
     pollIntervalMs*: int
     minFrameIntervalMs*: int
     sources*: seq[EventSource]
@@ -154,6 +154,8 @@ proc applyResponse(app: var App, routed: tuple[result: EventResponse,
   if routed.result.requestFocus: app.focus(routed.target)
   if routed.result.captureMouse: app.mouseCapture = routed.target
   if routed.result.releaseMouse: app.mouseCapture = nil
+  if routed.result.action.kind.len > 0 and not app.onAction.isNil:
+    app.onAction(app, routed.result.action)
 
 proc dispatch*(app: var App, event: UiEvent) =
   if event.kind == uiQuit:
@@ -236,6 +238,5 @@ proc run*(app: var App) =
   app.running = true
   app.render()
   while app.running:
-    if not app.step(app.pollIntervalMs) and not app.onPoll.isNil:
-      app.onPoll(app)
-      if app.dirty: app.render()
+    discard app.step(app.pollIntervalMs)
+    app.flush()

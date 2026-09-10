@@ -92,21 +92,25 @@ method readEvent*(backend: PosixBackend, timeoutMs: int): UiEvent =
 
 method present*(backend: PosixBackend, frame: Canvas) =
   discard backend
-  stdout.write("\e[H")
+  var output = newStringOfCap(frame.size.w * frame.size.h * 2)
+  output.add "\e[H"
   var activeStyle = defaultStyle()
   var hasStyle = false
   for y in 0 ..< frame.size.h:
-    stdout.write("\e[" & $(y + 1) & ";1H")
+    output.add "\e["
+    output.add $(y + 1)
+    output.add ";1H"
     for x in 0 ..< frame.size.w:
       let cell = frame.getCell(x, y)
       if not hasStyle or not sameStyle(activeStyle, cell.style):
-        stdout.write("\e[0m")
-        stdout.write(sgr(cell.style))
+        output.add "\e[0m"
+        output.add sgr(cell.style)
         activeStyle = cell.style
         hasStyle = true
-      stdout.write(toUTF8(cell.glyph))
+      output.add toUTF8(cell.glyph)
       if attrStrikethrough in cell.style.attributes and cell.glyph.int != 32:
         ## Some terminal emulators ignore SGR 9; draw a visible fallback.
-        stdout.write("\u0336")
-  stdout.write("\e[0m")
+        output.add "\u0336"
+  output.add "\e[0m"
+  stdout.write(output)
   stdout.flushFile()

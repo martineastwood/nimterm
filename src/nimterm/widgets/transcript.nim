@@ -32,11 +32,24 @@ type
     selectionStartCol*: int
     selectionEndCol*: int
     onCopy*: proc (text: string) {.closure.}
+    lineCache: seq[CachedItemLines]
 
   TranscriptLine = object
     text: string
     style: Style
     railStyle: Style
+
+  CachedItemLines = object
+    id: string
+    kind: TranscriptItemKind
+    textLen: int
+    title: string
+    model: string
+    pending: bool
+    isError: bool
+    expanded: bool
+    approvalRequired: bool
+    lines: seq[string]
 
 proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           userStyle = defaultStyle(),
@@ -56,7 +69,9 @@ proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
     for line in item.text.splitLines: result.add "│ " & line
   of tikAssistant:
     result.add "│ " & (if item.model.len > 0: item.model else: "Assistant")
-    for line in markdown_renderer.renderMarkdown(item.text, true).splitLines:
+    let text = if item.pending: item.text else:
+      markdown_renderer.renderMarkdown(item.text, true)
+    for line in text.splitLines:
       result.add "│ " & line
   of tikThinking:
     result.add "│ Thinking"
@@ -97,6 +112,27 @@ proc itemRailStyle(widget: TranscriptWidget, kind: TranscriptItemKind): Style =
   of tikError: widget.errorRailStyle
   of tikStatus: widget.thinkingRailStyle
 
+proc cacheMatches(cache: CachedItemLines,
+                  item: transcript_model.TranscriptItem): bool =
+  cache.id == item.id and cache.kind == item.kind and
+    cache.textLen == item.text.len and cache.title == item.title and
+    cache.model == item.model and cache.pending == item.pending and
+    cache.isError == item.isError and cache.expanded == item.expanded and
+    cache.approvalRequired == item.approvalRequired
+
+proc cachedItemLines(widget: TranscriptWidget, index: int,
+                     item: transcript_model.TranscriptItem): seq[string] =
+  if index < widget.lineCache.len and widget.lineCache[index].cacheMatches(item):
+    return widget.lineCache[index].lines
+  let lines = item.itemLines
+  if index >= widget.lineCache.len:
+    widget.lineCache.setLen(index + 1)
+  widget.lineCache[index] = CachedItemLines(id: item.id, kind: item.kind,
+    textLen: item.text.len, title: item.title, model: item.model,
+    pending: item.pending, isError: item.isError, expanded: item.expanded,
+    approvalRequired: item.approvalRequired, lines: lines)
+  lines
+
 proc apply*(widget: TranscriptWidget, event: AgentUiEvent) =
   widget.transcript.apply(event)
 
@@ -106,13 +142,13 @@ proc awaitingApproval*(widget: TranscriptWidget): bool =
       return true
 
 proc allLines(widget: TranscriptWidget): seq[TranscriptLine] =
-  for item in widget.transcript.items:
+  for index, item in widget.transcript.items:
     if result.len > 0:
       result.add TranscriptLine(style: defaultStyle(), railStyle: defaultStyle())
     let style = widget.itemStyle(item.kind)
     let railStyle = widget.itemRailStyle(item.kind)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
-    for line in item.itemLines:
+    for line in widget.cachedItemLines(index, item):
       result.add TranscriptLine(text: line, style: style,
         railStyle: railStyle)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
@@ -284,15 +320,15 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
 method measure*(widget: TranscriptWidget, constraints: Constraints): Size =
   var height = 0
   var width = 0
-  for item in widget.transcript.items:
-    for line in item.itemLines:
+  for index, item in widget.transcript.items:
+    for line in widget.cachedItemLines(index, item):
       width = max(width, ansiVisibleWidth(line))
       inc height
   constraints.clamp(size(width, height))
 
 method paint*(widget: TranscriptWidget, canvas: var Canvas) =
   let lines = widget.allLines
-  let start = widget.visibleStart
+  let start = max(0, lines.len - widget.area.h - widget.scrollOffset)
   var y = widget.area.y
   for i in start ..< lines.len:
     if y >= widget.area.y + widget.area.h: return

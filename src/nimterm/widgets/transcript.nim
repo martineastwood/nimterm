@@ -236,7 +236,7 @@ proc scrollBy*(widget: TranscriptWidget, delta: int) =
   widget.scrollOffset = clamp(widget.scrollOffset + delta, 0,
     widget.maxScroll)
 
-method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
+method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
   case event.kind
   of uiKey:
     case event.key
@@ -308,7 +308,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
       widget.selectionStartCol = clamp(event.x - widget.area.x, 0,
         max(0, widget.area.w - 1))
       widget.selectionEndCol = widget.selectionStartCol
-      return eventHandled
+      return captureHandled()
     of umDrag:
       if widget.selectionStart >= 0:
         widget.selectionEnd = line
@@ -321,7 +321,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
         widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
           max(0, widget.area.w - 1))
         discard widget.copySelection()
-        return eventHandled
+        return releaseHandled()
     else:
       discard
   else:

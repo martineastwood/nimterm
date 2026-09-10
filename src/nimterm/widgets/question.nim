@@ -47,6 +47,7 @@ proc newQuestion*(prompt: string, options: seq[QuestionOption],
       cursorStyle = cursorStyle, cursorBarStyle = cursorStyle))
 
 method focusable*(widget: QuestionWidget): bool = not widget.resolved
+method modal*(widget: QuestionWidget): bool = not widget.resolved
 
 proc optionCount(widget: QuestionWidget): int =
   widget.options.len + (if widget.allowFreeText: 1 else: 0)
@@ -78,7 +79,7 @@ proc moveSelection(widget: QuestionWidget, delta: int) =
 proc promptLines(widget: QuestionWidget): seq[string] =
   widget.prompt.splitLines
 
-method handle*(widget: QuestionWidget, event: UiEvent): EventResult =
+method handle*(widget: QuestionWidget, event: UiEvent): EventResponse =
   if widget.resolved: return eventIgnored
   if event.kind == uiMouse:
     if event.mouse != umPress or not widget.area.contains(event.x, event.y):
@@ -86,7 +87,7 @@ method handle*(widget: QuestionWidget, event: UiEvent): EventResult =
     let index = event.y - widget.area.y - widget.promptLines.len - 1
     if index < 0 or index >= widget.optionCount: return eventIgnored
     widget.selected = index
-    return eventHandled
+    return focusHandled()
   if event.kind != uiKey: return eventIgnored
   if event.key == keyEscape:
     widget.cancel()

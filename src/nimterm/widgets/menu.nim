@@ -65,12 +65,19 @@ proc moveSelection(widget: Menu, delta: int) =
   widget.selected = clamp(widget.selected + delta, 0, widget.items.high)
   widget.keepSelectionVisible(widget.contentRows)
 
-method handle*(widget: Menu, event: UiEvent): EventResult =
+method handle*(widget: Menu, event: UiEvent): EventResponse =
   if event.kind == uiMouse:
-    if widget.items.len == 0 or event.scrollDelta == 0:
-      return eventIgnored
-    widget.moveSelection(if event.scrollDelta < 0: 3 else: -3)
-    return eventHandled
+    if widget.items.len == 0: return eventIgnored
+    if event.scrollDelta != 0:
+      widget.moveSelection(if event.scrollDelta < 0: 3 else: -3)
+      return eventHandled
+    if event.mouse == umPress and widget.area.contains(event.x, event.y):
+      let inset = if widget.bordered: 1 else: 0
+      let index = widget.scrollOffset + event.y - widget.area.y - inset
+      if index >= 0 and index < widget.items.len:
+        widget.selected = index
+        return focusHandled()
+    return eventIgnored
   if event.kind != uiKey or widget.items.len == 0:
     return eventIgnored
   case event.key

@@ -74,22 +74,40 @@ method readEvent(backend: FakeBackend, timeoutMs: int): UiEvent =
 method present(backend: FakeBackend, frame: Canvas) =
   backend.presented = frame
 
+type FakeSource = ref object of EventSource
+  events: seq[UiEvent]
+  closed: bool
+
+method poll(source: FakeSource): seq[UiEvent] =
+  result = source.events
+  source.events.setLen(0)
+
+method close(source: FakeSource) = source.closed = true
+
 type Probe = ref object of Widget
   kids: seq[Widget]
   canFocus: bool
   handleKeys: bool
   handleMouse: bool
+  capturePress: bool
+  modalFlag: bool
+  hidden: bool
+  disabled: bool
   keysSeen: int
   mouseSeen: int
 
 method children(widget: Probe): seq[Widget] = widget.kids
 method focusable(widget: Probe): bool = widget.canFocus
-method handle(widget: Probe, event: UiEvent): EventResult =
+method visible(widget: Probe): bool = not widget.hidden
+method enabled(widget: Probe): bool = not widget.disabled
+method modal(widget: Probe): bool = widget.modalFlag
+method handle(widget: Probe, event: UiEvent): EventResponse =
   if event.kind == uiKey:
     inc widget.keysSeen
     return if widget.handleKeys: eventHandled else: eventIgnored
   if event.kind == uiMouse:
     inc widget.mouseSeen
+    if event.mouse == umPress and widget.capturePress: return captureHandled()
     return if widget.handleMouse: eventHandled else: eventIgnored
   eventIgnored
 method paint(widget: Probe, canvas: var Canvas) =
@@ -121,12 +139,27 @@ suite "core canvas and app":
     app.run()
     check polls == 1
 
+  test "event sources and timers enter the normal dispatch queue":
+    let source = FakeSource(events: @[UiEvent(kind: uiAgent,
+      agent: AgentUiEvent(kind: ueTextDelta, text: "source"))])
+    var app = newApp(FakeBackend())
+    app.addSource(source)
+    app.schedule("tick", 0)
+    var seen: seq[string]
+    app.onEvent = proc (_: var App, event: UiEvent): EventResponse =
+      if event.kind == uiAgent: seen.add event.agent.text
+      if event.kind == uiTimer: seen.add event.timerId
+      eventIgnored
+    check app.step()
+    check app.step()
+    check seen == @["source", "tick"]
+
   test "app dispatches agent events and presents a frame":
     let backend = FakeBackend(events: @[agentEvent(AgentUiEvent(
       kind: ueTextDelta, text: "hello"))])
     var app = newApp(backend, newText("ready"))
     var seen = ""
-    app.onEvent = proc (_: var App, event: UiEvent): EventResult =
+    app.onEvent = proc (_: var App, event: UiEvent): EventResponse =
       if event.kind == uiAgent:
         seen = event.agent.text
       eventIgnored
@@ -150,7 +183,7 @@ suite "core canvas and app":
 
   test "mouse uses reverse paint order and captures a drag":
     let lower = Probe(canFocus: true, handleMouse: true)
-    let upper = Probe(canFocus: true, handleMouse: true)
+    let upper = Probe(canFocus: true, handleMouse: true, capturePress: true)
     let root = Probe(kids: @[Widget(lower), Widget(upper)])
     var app = newApp(FakeBackend(), root)
     app.render()
@@ -162,6 +195,27 @@ suite "core canvas and app":
     check upper.mouseSeen == 2
     app.dispatch(UiEvent(kind: uiMouse, mouse: umRelease, x: 50, y: 50))
     check app.mouseCapture.isNil
+
+  test "modal widgets constrain keyboard routing and focus":
+    let background = Probe(canFocus: true, handleKeys: true)
+    let dialog = Probe(canFocus: true, handleKeys: true, modalFlag: true)
+    let root = Probe(kids: @[Widget(background), Widget(dialog)])
+    var app = newApp(FakeBackend(), root)
+    app.render()
+    app.focus(background)
+    app.dispatch(UiEvent(kind: uiKey, key: keyEnter))
+    check app.focus.isNil
+    check background.keysSeen == 0
+    check dialog.keysSeen == 1
+
+  test "disabled widgets are skipped by focus traversal":
+    let disabled = Probe(canFocus: true, disabled: true)
+    let enabled = Probe(canFocus: true)
+    let root = Probe(kids: @[Widget(disabled), Widget(enabled)])
+    var app = newApp(FakeBackend(), root)
+    app.render()
+    app.dispatch(UiEvent(kind: uiKey, key: keyTab))
+    check app.focus == enabled
 
   test "menu changes selection and invokes selection callback":
     var selected = -1

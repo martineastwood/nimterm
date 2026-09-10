@@ -224,7 +224,10 @@ proc moveVertical(widget: InputWidget, delta: int) =
   let column = min(current.column, line.displayWidth)
   widget.cursor = start + byteAtColumn(line, column)
 
-method handle*(widget: InputWidget, event: UiEvent): EventResult =
+method handle*(widget: InputWidget, event: UiEvent): EventResponse =
+  if event.kind == uiMouse and event.mouse == umPress and
+      widget.area.contains(event.x, event.y):
+    return focusHandled()
   if event.kind != uiKey: return eventIgnored
   case event.key
   of keyChar:

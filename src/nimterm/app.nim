@@ -6,6 +6,18 @@ import ./events
 import ./geometry
 import ./keys
 import ./widget
+import std/[monotimes, times]
+
+type
+  EventSource* = ref object of RootObj
+
+  Timer = object
+    id: string
+    due: MonoTime
+    intervalMs: int
+
+method poll*(source: EventSource): seq[UiEvent] {.base.} = @[]
+method close*(source: EventSource) {.base.} = discard
 
 type
   EventQueue* = object
@@ -21,9 +33,13 @@ type
     dirty*: bool
     focus*: Widget
     mouseCapture*: Widget
-    onEvent*: proc (app: var App, event: UiEvent): EventResult {.closure.}
+    onEvent*: proc (app: var App, event: UiEvent): EventResponse {.closure.}
     onPoll*: proc (app: var App) {.closure.}
     pollIntervalMs*: int
+    minFrameIntervalMs*: int
+    sources*: seq[EventSource]
+    timers: seq[Timer]
+    lastPresent: MonoTime
 
 proc post*(queue: var EventQueue, event: UiEvent) =
   queue.events.add event
@@ -46,6 +62,37 @@ proc newApp*(backend: TerminalBackend, root: Widget = nil): App =
   result.dirty = true
   result.pollIntervalMs = 16
 
+proc addSource*(app: var App, source: EventSource) =
+  if not source.isNil: app.sources.add source
+
+proc schedule*(app: var App, id: string, delayMs: int, intervalMs = 0) =
+  app.timers.add Timer(id: id, due: getMonoTime() +
+    initDuration(milliseconds = max(0, delayMs)), intervalMs: intervalMs)
+
+proc cancelTimer*(app: var App, id: string) =
+  for i in countdown(app.timers.high, 0):
+    if app.timers[i].id == id: app.timers.delete(i)
+
+proc collectEvents(app: var App) =
+  for source in app.sources:
+    for event in source.poll: app.queue.post(event)
+  let now = getMonoTime()
+  for i in countdown(app.timers.high, 0):
+    if now < app.timers[i].due: continue
+    app.queue.post UiEvent(kind: uiTimer, timerId: app.timers[i].id)
+    if app.timers[i].intervalMs > 0:
+      app.timers[i].due = now +
+        initDuration(milliseconds = app.timers[i].intervalMs)
+    else:
+      app.timers.delete(i)
+
+proc waitTimeout(app: App, requested: int): int =
+  result = requested
+  let now = getMonoTime()
+  for timer in app.timers:
+    let remaining = max(0'i64, (timer.due - now).inMilliseconds).int
+    if result < 0 or remaining < result: result = remaining
+
 proc invalidate*(app: var App) =
   app.dirty = true
 
@@ -54,23 +101,24 @@ proc post*(app: var App, event: UiEvent) =
 
 proc focus*(app: var App, widget: Widget) =
   app.focus = if not widget.isNil and widget.focusable and
-      not app.root.isNil and app.root.contains(widget): widget else: nil
+      widget.visible and widget.enabled and not app.root.isNil and
+      app.root.contains(widget): widget else: nil
 
 proc focusables(widget: Widget, result: var seq[Widget]) =
-  if widget.isNil: return
+  if widget.isNil or not widget.visible or not widget.enabled: return
   if widget.focusable: result.add widget
   for child in widget.children: child.focusables(result)
 
-proc moveFocus(app: var App, delta: int) =
+proc moveFocus(app: var App, root: Widget, delta: int) =
   var candidates: seq[Widget]
-  app.root.focusables(candidates)
+  root.focusables(candidates)
   if candidates.len == 0: return
   let current = candidates.find(app.focus)
   app.focus = candidates[(if current < 0: 0 else:
     (current + delta + candidates.len) mod candidates.len)]
 
 proc pathTo(widget, target: Widget, path: var seq[Widget]): bool =
-  if widget.isNil: return false
+  if widget.isNil or not widget.visible or not widget.enabled: return false
   path.add widget
   if widget == target: return true
   for child in widget.children:
@@ -78,44 +126,63 @@ proc pathTo(widget, target: Widget, path: var seq[Widget]): bool =
   path.setLen(path.len - 1)
 
 proc hitPath(widget: Widget, x, y: int, path: var seq[Widget]): bool =
-  if widget.isNil or not widget.area.contains(x, y): return false
+  if widget.isNil or not widget.visible or not widget.enabled or
+      not widget.area.contains(x, y): return false
   path.add widget
   let kids = widget.children
   for i in countdown(kids.high, 0):
     if kids[i].hitPath(x, y, path): return true
   true
 
-proc route(path: seq[Widget], event: UiEvent): tuple[result: EventResult,
+proc route(path: seq[Widget], event: UiEvent): tuple[result: EventResponse,
                                                     target: Widget] =
   for i in countdown(path.high, 0):
-    if path[i].handle(event) == eventHandled:
-      return (eventHandled, path[i])
+    let response = path[i].handle(event)
+    if response.handled: return (response, path[i])
   (eventIgnored, nil)
+
+proc modalRoot(widget: Widget): Widget =
+  if widget.isNil or not widget.visible or not widget.enabled: return nil
+  let kids = widget.children
+  for i in countdown(kids.high, 0):
+    let nested = kids[i].modalRoot
+    if not nested.isNil: return nested
+  if widget.modal: widget else: nil
+
+proc applyResponse(app: var App, routed: tuple[result: EventResponse,
+                                               target: Widget]) =
+  if routed.result.requestFocus: app.focus(routed.target)
+  if routed.result.captureMouse: app.mouseCapture = routed.target
+  if routed.result.releaseMouse: app.mouseCapture = nil
 
 proc dispatch*(app: var App, event: UiEvent) =
   if event.kind == uiQuit:
     app.running = false
-  if not app.onEvent.isNil and app.onEvent(app, event) == eventHandled:
+  if not app.onEvent.isNil and app.onEvent(app, event).handled:
     app.invalidate()
     return
   if not app.root.isNil:
+    let scope = block:
+      let modal = app.root.modalRoot
+      if modal.isNil: app.root else: modal
+    if not app.focus.isNil and not scope.contains(app.focus): app.focus = nil
+    if not app.mouseCapture.isNil and not scope.contains(app.mouseCapture):
+      app.mouseCapture = nil
     var path: seq[Widget]
     if event.kind == uiMouse:
       let target = if not app.mouseCapture.isNil: app.mouseCapture else: nil
-      if not target.isNil: discard app.root.pathTo(target, path)
-      else: discard app.root.hitPath(event.x, event.y, path)
+      if not target.isNil: discard scope.pathTo(target, path)
+      else: discard scope.hitPath(event.x, event.y, path)
       let routed = path.route(event)
-      if event.mouse == umPress and routed.result == eventHandled:
-        app.focus(routed.target)
-        app.mouseCapture = routed.target
-      elif event.mouse == umRelease:
-        app.mouseCapture = nil
+      app.applyResponse(routed)
+      if event.mouse == umRelease: app.mouseCapture = nil
     else:
-      if app.focus.isNil or not app.root.pathTo(app.focus, path): path = @[app.root]
+      if app.focus.isNil or not scope.pathTo(app.focus, path): path = @[scope]
       let routed = path.route(event)
-      if routed.result == eventIgnored and event.kind == uiKey and
+      app.applyResponse(routed)
+      if not routed.result.handled and event.kind == uiKey and
           event.key in {keyTab, keyShiftTab}:
-        app.moveFocus(if event.key == keyTab: 1 else: -1)
+        app.moveFocus(scope, if event.key == keyTab: 1 else: -1)
   app.invalidate()
 
 proc render*(app: var App) =
@@ -130,27 +197,42 @@ proc render*(app: var App) =
   if not app.root.isNil:
     app.root.render(app.frame, rect(0, 0, app.size.w, app.size.h))
   app.backend.present(app.frame)
+  app.lastPresent = getMonoTime()
   app.dirty = false
+
+proc flush*(app: var App, force = false) =
+  if not app.dirty: return
+  if force or app.minFrameIntervalMs <= 0 or
+      (getMonoTime() - app.lastPresent).inMilliseconds >= app.minFrameIntervalMs:
+    app.render()
 
 proc step*(app: var App, timeoutMs = 0): bool =
   ## Process one queued/backend event and render if invalidated.
   var event: UiEvent
-  if not app.queue.tryPop(event):
+  var hasEvent = app.queue.tryPop(event)
+  if not hasEvent:
+    app.collectEvents()
+    hasEvent = app.queue.tryPop(event)
+  if not hasEvent:
     if app.backend.isNil:
       return false
-    event = app.backend.readEvent(timeoutMs)
+    event = app.backend.readEvent(app.waitTimeout(timeoutMs))
     if event.kind == uiNone:
-      return false
+      app.collectEvents()
+      if not app.queue.tryPop(event): return false
   app.dispatch(event)
-  if app.dirty:
-    app.render()
+  app.flush()
   true
+
+proc pump*(app: var App, timeoutMs = 0): bool = app.step(timeoutMs)
 
 proc run*(app: var App) =
   if app.backend.isNil:
     raise newException(ValueError, "nimterm App requires a terminal backend")
   app.backend.init()
-  defer: app.backend.shutdown()
+  defer:
+    for source in app.sources: source.close()
+    app.backend.shutdown()
   app.running = true
   app.render()
   while app.running:

@@ -26,6 +26,8 @@ type
     step*: int
     model*: string
     approve*: proc (allowed: bool) {.closure.}
+    rememberSession*: proc () {.closure.}
+    rememberProject*: proc () {.closure.}
 
   Transcript* = object
     items*: seq[TranscriptItem]
@@ -90,11 +92,14 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
       if event.text.len > 0:
         transcript.items[index].text = event.text
       transcript.items[index].approve = event.approve
+      transcript.items[index].rememberSession = event.rememberSession
+      transcript.items[index].rememberProject = event.rememberProject
     else:
       transcript.items.add TranscriptItem(kind: tikTool, id: event.toolId,
         title: event.toolName, text: event.text, toolInput: event.toolInput,
         pending: true, approvalRequired: true, step: event.step,
-        approve: event.approve)
+        approve: event.approve, rememberSession: event.rememberSession,
+        rememberProject: event.rememberProject)
   of ueToolResult:
     let index = transcript.itemIndex(event.toolId)
     if index >= 0:
@@ -104,6 +109,8 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
       transcript.items[index].durationMs = event.durationMs
       transcript.items[index].approvalRequired = false
       transcript.items[index].approve = nil
+      transcript.items[index].rememberSession = nil
+      transcript.items[index].rememberProject = nil
     else:
       transcript.items.add TranscriptItem(kind: tikTool, id: event.toolId,
         title: event.toolName, text: event.toolOutput, pending: false,

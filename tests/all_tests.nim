@@ -277,6 +277,20 @@ suite "transcript":
     check handled == eventHandled
     check allowed == 1
 
+  test "remember-session and remember-project actions resolve approval":
+    var allowed = -1
+    var remembered = ""
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call-scope",
+      toolName: "bash")
+    view.apply AgentUiEvent(kind: ueApprovalRequired, toolId: "call-scope",
+      approve: proc (value: bool) = allowed = if value: 1 else: 0,
+      rememberSession: proc () = remembered = "session",
+      rememberProject: proc () = remembered = "project")
+    check view.handle(UiEvent(kind: uiKey, key: keyChar, text: "s")) == eventHandled
+    check remembered == "session"
+    check allowed == 1
+
   test "escape denies approval without exiting":
     var allowed = -1
     let view = newTranscriptWidget()

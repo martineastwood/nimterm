@@ -40,6 +40,8 @@ type
     durationMs*: int
     error*: string
     approve*: proc (allowed: bool) {.closure.}
+    rememberSession*: proc () {.closure.}
+    rememberProject*: proc () {.closure.}
 
   UiEventKind* = enum
     uiNone

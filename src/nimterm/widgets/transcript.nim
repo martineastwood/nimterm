@@ -69,7 +69,11 @@ proc itemLines(item: transcript_model.TranscriptItem): seq[string] =
     if not item.expanded and lines.len > shown:
       result.add "│   … " & $(lines.len - shown) & " more (Ctrl-O)"
     if item.pending: result.add "│   working"
-    if item.approvalRequired: result.add "│   [y] approve  [n] deny"
+    if item.approvalRequired:
+      result.add "│   [Enter] once"
+      if not item.rememberSession.isNil: result.add "  [s] session"
+      if not item.rememberProject.isNil: result.add "  [p] project"
+      result.add "  [n] deny"
   of tikError:
     for line in item.text.splitLines: result.add "│ " & line
   of tikStatus:
@@ -203,14 +207,20 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResult =
       widget.scrollBy(max(1, widget.area.h div 2))
     of keyPageDown, keyCtrlF:
       widget.scrollBy(-max(1, widget.area.h div 2))
-    of keyChar:
+    of keyChar, keyEnter:
       for i in countdown(widget.transcript.items.high, 0):
         if not widget.transcript.items[i].approvalRequired: continue
-        let allowed = event.text.toLowerAscii == "y"
-        if not allowed and event.text.toLowerAscii != "n":
+        let choice = if event.key == keyEnter: "y" else: event.text.toLowerAscii
+        if choice notin ["y", "n", "s", "p"]:
           return eventIgnored
+        if choice == "s":
+          if widget.transcript.items[i].rememberSession.isNil: return eventIgnored
+          widget.transcript.items[i].rememberSession()
+        elif choice == "p":
+          if widget.transcript.items[i].rememberProject.isNil: return eventIgnored
+          widget.transcript.items[i].rememberProject()
         let callback = widget.transcript.items[i].approve
-        if not callback.isNil: callback(allowed)
+        if not callback.isNil: callback(choice != "n")
         widget.transcript.items[i].approvalRequired = false
         return eventHandled
       return eventIgnored

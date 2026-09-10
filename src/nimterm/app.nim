@@ -10,6 +10,7 @@ import std/[monotimes, times]
 
 type
   EventSource* = ref object of RootObj
+    id*: string
 
   Timer = object
     id: string
@@ -74,8 +75,18 @@ proc cancelTimer*(app: var App, id: string) =
     if app.timers[i].id == id: app.timers.delete(i)
 
 proc collectEvents(app: var App) =
-  for source in app.sources:
-    for event in source.poll: app.queue.post(event)
+  var i = 0
+  while i < app.sources.len:
+    let source = app.sources[i]
+    try:
+      for event in source.poll: app.queue.post(event)
+      inc i
+    except CatchableError as error:
+      app.queue.post UiEvent(kind: uiError, sourceId: source.id,
+        error: error.msg)
+      try: source.close()
+      except CatchableError: discard
+      app.sources.delete(i)
   let now = getMonoTime()
   for i in countdown(app.timers.high, 0):
     if now < app.timers[i].due: continue
@@ -222,7 +233,13 @@ proc step*(app: var App, timeoutMs = 0): bool =
     if event.kind == uiNone:
       app.collectEvents()
       if not app.queue.tryPop(event): return false
-  app.dispatch(event)
+  try:
+    app.dispatch(event)
+  except CatchableError as error:
+    if event.kind != uiError:
+      app.queue.post UiEvent(kind: uiError, sourceId: "dispatch",
+        error: error.msg)
+    app.invalidate()
   app.flush()
   true
 
@@ -233,7 +250,9 @@ proc run*(app: var App) =
     raise newException(ValueError, "nimterm App requires a terminal backend")
   app.backend.init()
   defer:
-    for source in app.sources: source.close()
+    for source in app.sources:
+      try: source.close()
+      except CatchableError: discard
     app.backend.shutdown()
   app.running = true
   app.render()

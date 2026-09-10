@@ -15,6 +15,35 @@ proc decodeBytes(bytes: string): InputEvent =
   decodeInput(if bytes.len == 0: -1 else: bytes[0].ord, nextByte)
 
 suite "terminal input decoding":
+  test "buffers escape until its ambiguity deadline":
+    var decoder: InputDecoder
+    decoder.feed("\e")
+    check decoder.nextEvent(100).key == keyNone
+    check decoder.nextEvent(129).key == keyNone
+    check decoder.nextEvent(130).key == keyEscape
+
+  test "decodes several events from one byte chunk":
+    var decoder: InputDecoder
+    decoder.feed("ab")
+    check decoder.nextEvent(0).text == "a"
+    check decoder.nextEvent(0).text == "b"
+    check decoder.nextEvent(0).key == keyNone
+
+  test "preserves sequences split at every byte boundary":
+    for bytes in ["界", "\e[A", "\e[118;5u", "\e[<32;3;4M",
+                  "\e[200~one\r\ntwo\e[201~"]:
+      for split in 1 ..< bytes.len:
+        var decoder: InputDecoder
+        decoder.feed(bytes[0 ..< split])
+        let partial = decoder.nextEvent(100)
+        check partial.key == keyNone
+        check partial.mouse == mouseNone
+        check partial.focus == focusNone
+        decoder.feed(bytes[split .. ^1])
+        let complete = decoder.nextEvent(100)
+        check complete.key != keyNone or complete.mouse != mouseNone or
+          complete.scrollDelta != 0 or complete.focus != focusNone
+
   test "distinguishes escape from complete and partial control sequences":
     check decodeBytes("\e").key == keyEscape
     check decodeBytes("\e[A").key == keyUp
@@ -129,11 +158,19 @@ type FakeSource = ref object of EventSource
   events: seq[UiEvent]
   closed: bool
 
+type FailingSource = ref object of EventSource
+  closed: bool
+
 method poll(source: FakeSource): seq[UiEvent] =
   result = source.events
   source.events.setLen(0)
 
 method close(source: FakeSource) = source.closed = true
+
+method poll(source: FailingSource): seq[UiEvent] =
+  raise newException(IOError, "source failed")
+
+method close(source: FailingSource) = source.closed = true
 
 type Probe = ref object of Widget
   kids: seq[Widget]
@@ -165,6 +202,40 @@ method paint(widget: Probe, canvas: var Canvas) =
   for child in widget.kids: child.render(canvas, widget.area)
 
 suite "core canvas and app":
+  test "event source failures become events and disable the source":
+    let backend = FakeBackend()
+    let source = FailingSource(id: "broken")
+    var app = newApp(backend)
+    var failure: UiEvent
+    app.onEvent = proc (_: var App, event: UiEvent): EventResponse =
+      if event.kind == uiError:
+        failure = event
+        return eventHandled
+      eventIgnored
+    app.addSource(source)
+    check app.step()
+    check failure.sourceId == "broken"
+    check failure.error == "source failed"
+    check source.closed
+    check app.sources.len == 0
+
+  test "controller failures become UI errors":
+    let backend = FakeBackend(events: @[UiEvent(kind: uiKey, key: keyEnter)])
+    var app = newApp(backend)
+    var first = true
+    var failure = ""
+    app.onEvent = proc (_: var App, event: UiEvent): EventResponse =
+      if first:
+        first = false
+        raise newException(ValueError, "controller failed")
+      if event.kind == uiError:
+        failure = event.error
+        return eventHandled
+      eventIgnored
+    check app.step()
+    check app.step()
+    check failure == "controller failed"
+
   test "constructs the POSIX backend without entering raw mode":
     check not newPosixBackend().isNil
 

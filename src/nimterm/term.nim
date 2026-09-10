@@ -178,6 +178,12 @@ proc readByte*(): int =
     return ord(ch)
   -1
 
+proc readAvailable*(): string =
+  while inputPending(0):
+    let value = readByte()
+    if value < 0: break
+    result.add char(value)
+
 proc consumeResize*(): bool =
   ## ioctl size — portable without SIGWINCH (missing on some Nim/mac builds).
   let s = measureTerm()

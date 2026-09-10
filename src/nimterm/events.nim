@@ -60,6 +60,7 @@ type
     uiKey
     uiMouse
     uiFocus
+    uiError
     uiResize
     uiTimer
     uiAgent
@@ -74,6 +75,9 @@ type
     mouse*: UiMouseKind
     scrollDelta*: int
     focused*: bool
+    sourceId*: string
+    error*: string
+    cancelled*: bool
     width*: int
     height*: int
     timerId*: string

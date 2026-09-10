@@ -4,11 +4,15 @@
 ## mouse events.
 
 import std/strutils
+import ./events
 import ./keys
-import ./term
 
 type
   ByteReader* = proc(timeoutMs: int): int {.closure.}
+
+  InputDecoder* = object
+    buffer: string
+    escapeStartedMs: int64
 
   MouseKind* = enum
     mouseNone
@@ -31,11 +35,6 @@ type
     mouseX*: int        ## 0-based column
     mouseY*: int        ## 0-based row
     focus*: FocusKind
-
-proc readByteWait(ms: int): int =
-  if inputPending(ms):
-    return readByte()
-  -1
 
 proc normalizePasteText*(s: string): string =
   ## CR LF / CR → LF so a paste never submits.
@@ -340,18 +339,67 @@ proc decodeInput*(b: int, readNext: ByteReader): InputEvent =
     return charEvent(readUtf8Text(b, readNext))
   result.key = keyNone
 
-proc readInputEvent*(timeoutMs: int): InputEvent =
-  if consumeResize():
-    result.resized = true
-    return
+proc feed*(decoder: var InputDecoder, bytes: string) =
+  decoder.buffer.add bytes
 
-  if not inputPending(timeoutMs):
-    if consumeResize(): result.resized = true
-    else: result.key = keyNone
-    return
+proc pending*(decoder: InputDecoder): bool = decoder.buffer.len > 0
 
-  if consumeResize():
-    result.resized = true
-    if not inputPending(0): return
+proc escapeWaitMs*(decoder: InputDecoder, nowMs: int64,
+                   timeoutMs = 30): int =
+  if decoder.buffer.len == 0 or decoder.buffer[0] != '\e': return -1
+  if decoder.escapeStartedMs <= 0: return timeoutMs
+  max(0, timeoutMs - int(nowMs - decoder.escapeStartedMs))
 
-  decodeInput(readByte(), readByteWait)
+proc sequenceLength(decoder: var InputDecoder, nowMs: int64,
+                    escapeTimeoutMs: int): int =
+  let bytes = decoder.buffer
+  if bytes.len == 0: return 0
+  let first = bytes[0].ord
+  if first != 0x1b:
+    let needed = utf8SeqLen(first)
+    return if bytes.len >= needed: needed else: 0
+  if decoder.escapeStartedMs <= 0: decoder.escapeStartedMs = nowMs
+  if bytes.len == 1: return if nowMs - decoder.escapeStartedMs >= escapeTimeoutMs: 1 else: 0
+  if bytes[1] == 'O':
+    if bytes.len >= 3: return 3
+  elif bytes[1] == '[':
+    if bytes.startsWith("\e[200~"):
+      let finish = bytes.find("\e[201~", 6)
+      if finish >= 0: return finish + 6
+    elif bytes.len >= 3:
+      for i in 2 ..< bytes.len:
+        if bytes[i].ord in 0x40 .. 0x7e: return i + 1
+  else:
+    return 2
+  if nowMs - decoder.escapeStartedMs >= escapeTimeoutMs: return 1
+
+proc nextEvent*(decoder: var InputDecoder, nowMs: int64,
+                escapeTimeoutMs = 30): InputEvent =
+  let length = decoder.sequenceLength(nowMs, escapeTimeoutMs)
+  if length == 0: return InputEvent(key: keyNone)
+  let bytes = decoder.buffer[0 ..< length]
+  decoder.buffer.delete(0 ..< length)
+  decoder.escapeStartedMs = 0
+  var index = 1
+  proc nextByte(timeoutMs: int): int =
+    discard timeoutMs
+    if index >= bytes.len: return -1
+    result = bytes[index].ord
+    inc index
+  decodeInput(bytes[0].ord, nextByte)
+
+proc toUiEvent*(input: InputEvent, width = 0, height = 0): UiEvent =
+  if input.resized:
+    return UiEvent(kind: uiResize, width: width, height: height)
+  if input.focus != focusNone:
+    return UiEvent(kind: uiFocus, focused: input.focus == focusIn)
+  if input.mouse != mouseNone or input.scrollDelta != 0:
+    return UiEvent(kind: uiMouse, x: input.mouseX, y: input.mouseY,
+      mouse: case input.mouse
+        of mousePress: umPress
+        of mouseRelease: umRelease
+        of mouseDrag: umDrag
+        of mouseNone: umScroll,
+      scrollDelta: input.scrollDelta)
+  if input.key != keyNone:
+    return UiEvent(kind: uiKey, key: input.key, text: input.text)

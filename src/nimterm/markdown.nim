@@ -6,6 +6,7 @@
 ## blockquotes, horizontal rules, and tables.
 
 import std/[strutils, sequtils]
+import ./ansi
 import ./text_width
 import ./theme
 
@@ -140,7 +141,8 @@ proc isTableSeparator(line: string): bool =
       if ch != '-' and ch != ':' and ch != ' ': return false
   true
 
-proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
+proc renderTable(rows: seq[seq[string]], useColor: bool,
+                 maxWidth: int): seq[string] =
   ## Render a markdown table with Unicode box-drawing characters.
   if rows.len == 0: return
   let t = currentTheme
@@ -155,6 +157,18 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
         let visible = renderInline(cell, false)
         colWidths[c] = max(colWidths[c], displayWidth(visible))
 
+  if maxWidth > 0:
+    var total = 0
+    for width in colWidths: total += width
+    let available = max(0, maxWidth - (3 * numCols + 1))
+    while total > available:
+      var widest = 0
+      for i, width in colWidths:
+        if width > colWidths[widest]: widest = i
+      if colWidths[widest] <= 1: break
+      dec colWidths[widest]
+      dec total
+
   let topBorder = "┌" & colWidths.mapIt("─".repeat(it + 2)).join("┬") & "┐"
   let midBorder = "├" & colWidths.mapIt("─".repeat(it + 2)).join("┼") & "┤"
   let botBorder = "└" & colWidths.mapIt("─".repeat(it + 2)).join("┴") & "┘"
@@ -165,17 +179,23 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
     result.add topBorder
 
   for r, row in rows:
-    var line = "│"
+    var cellLines = newSeq[seq[string]](numCols)
+    var rowHeight = 1
     for c in 0 ..< numCols:
       let cell = if c < row.len: row[c] else: ""
-      let rendered = renderInline(cell, color)
-      let pad = colWidths[c] - displayWidth(renderInline(cell, false))
-      let content = " " & rendered & " ".repeat(pad) & " "
-      if r == 0 and color:
-        line.add t.heading & content & t.reset & "│"
-      else:
-        line.add content & "│"
-    result.add line
+      cellLines[c] = wrapAnsi(renderInline(cell, color), max(1, colWidths[c]), true)
+      rowHeight = max(rowHeight, cellLines[c].len)
+    for lineIndex in 0 ..< rowHeight:
+      var line = "│"
+      for c in 0 ..< numCols:
+        let content = if lineIndex < cellLines[c].len: cellLines[c][lineIndex] else: ""
+        let pad = colWidths[c] - ansiVisibleWidth(content)
+        let cellText = " " & content & " ".repeat(max(0, pad)) & " "
+        if r == 0 and color:
+          line.add t.heading & cellText & t.reset & "│"
+        else:
+          line.add cellText & "│"
+      result.add line
     if r == 0:
       if color:
         result.add t.paint(t.dim, midBorder)
@@ -187,7 +207,7 @@ proc renderTable(rows: seq[seq[string]], useColor: bool): seq[string] =
   else:
     result.add botBorder
 
-proc renderMarkdown*(text: string, useColor: bool): string =
+proc renderMarkdown*(text: string, useColor: bool, maxWidth = 0): string =
   ## Render a markdown response to a string with optional ANSI colors.
   let t = currentTheme
   let color = useColor and t.colorsOn
@@ -198,7 +218,7 @@ proc renderMarkdown*(text: string, useColor: bool): string =
   var codeLang = ""
   var tableRows: seq[seq[string]]
 
-  for line in lines:
+  for i, line in lines:
     case state
     of rsNormal:
       if line.startsWith("```"):
@@ -206,8 +226,9 @@ proc renderMarkdown*(text: string, useColor: bool): string =
         codeLang = line[3 .. ^1].strip
         codeLines = @[]
         continue
-      # Detect table: line starts with | and next line is a separator
-      if line.strip.startsWith("|"):
+      # Detect a table only once its header separator has arrived.
+      if line.strip.contains("|") and i + 1 < lines.len and
+          isTableSeparator(lines[i + 1]):
         state = rsTable
         tableRows = @[parseTableRow(line)]
         continue
@@ -252,11 +273,12 @@ proc renderMarkdown*(text: string, useColor: bool): string =
       else:
         codeLines.add line
     of rsTable:
-      if line.strip.startsWith("|"):
-        tableRows.add parseTableRow(line)
+      if line.strip.contains("|"):
+        if not (tableRows.len == 1 and isTableSeparator(line)):
+          tableRows.add parseTableRow(line)
       else:
         # Table ended — render it
-        rendered.add renderTable(tableRows, color)
+        rendered.add renderTable(tableRows, color, maxWidth)
         tableRows = @[]
         state = rsNormal
         # Re-process this line in normal mode
@@ -278,6 +300,6 @@ proc renderMarkdown*(text: string, useColor: bool): string =
 
   # Unterminated table
   if state == rsTable and tableRows.len > 0:
-    rendered.add renderTable(tableRows, color)
+    rendered.add renderTable(tableRows, color, maxWidth)
 
   result = rendered.join("\n")

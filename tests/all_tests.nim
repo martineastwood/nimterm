@@ -132,6 +132,35 @@ suite "markdown":
     canvas.writeAnsiText(0, 1, code[0], base, 40)
     check attrDim in canvas.getCell(0, 1).style.attributes
 
+  test "tables omit the separator row and fit the viewport":
+    let source = "| Location | Description |\n|---|---|\n| /tmp/a-long-path | a description that needs wrapping |"
+    let rendered = renderMarkdown(source, false, 24)
+    check "| --- |" notin rendered
+    for line in rendered.splitLines:
+      check displayWidth(line) <= 24
+
+  test "streaming waits for a table separator":
+    check "┌" notin renderMarkdown("| Location | Description |", false)
+    check "┌" in renderMarkdown("| Location | Description |\n|---|---|", false)
+
+  test "tables accept rows without outer pipes":
+    let source = "Area | What it is | Status\n--- | --- | ---\nGeometry | Sizes and coordinates | Done"
+    let rendered = renderMarkdown(source, false)
+    check "Geometry" in rendered
+    check "└" in rendered
+
+  test "tables keep mixed outer-pipe styles in one table":
+    let source = "| Area | What it is | Status |\n|---|---|---|\n| Geometry | Sizes and coordinates | Done |\nText | Styled text | Done\nPanel | Bordered container | Done"
+    let rendered = renderMarkdown(source, false)
+    for line in rendered.splitLines:
+      if "Text" in line or "Panel" in line:
+        check line.startsWith("│")
+
+  test "colored table cells keep their column padding":
+    let source = "| Area | Status |\n|---|---|\n| `Text` | Done |"
+    let lines = renderMarkdown(source, true).splitLines
+    check stripAnsi(lines[1]).find("│", 1) == stripAnsi(lines[3]).find("│", 1)
+
 suite "themes":
   test "compiles built-in themes":
     let compiled = compileNamedTheme("dark", cd256)

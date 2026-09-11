@@ -102,7 +102,7 @@ proc itemLines(widget: TranscriptWidget,
     for line in item.text.splitLines:
       result.add "│ " & currentTheme.paint(currentTheme.boldAccent, line)
   of tikAssistant:
-    let text = markdown_renderer.renderMarkdown(item.text, true)
+    let text = markdown_renderer.renderMarkdown(item.text, true, widget.area.w)
     for line in text.splitLines:
       result.add line
   of tikThinking:

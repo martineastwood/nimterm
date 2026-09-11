@@ -42,12 +42,15 @@ proc ansiVisibleWidth*(s: string): int =
     fastRuneAt(s, i, r)
     result += r.cellWidth
 
-proc wrapAnsi*(s: string, width: int): seq[string] =
-  ## Hard-wrap ANSI text without counting escape sequences as columns.
+proc wrapAnsi*(s: string, width: int, preferSpaces = false): seq[string] =
+  ## Wrap ANSI text without counting escape sequences as columns.
   if width <= 0: return @[s]
   var line = ""
   var active = ""
   var column = 0
+  var breakAt = -1
+  var breakColumn = 0
+  var breakActive = ""
   var i = 0
   while i < s.len:
     if s[i] == '\e':
@@ -70,11 +73,23 @@ proc wrapAnsi*(s: string, width: int): seq[string] =
       continue
     let runeWidth = rune.cellWidth
     if column > 0 and column + runeWidth > width:
-      if active.len > 0: line.add "\e[0m"
-      result.add line
-      line = active
-      column = 0
+      if preferSpaces and breakAt > 0:
+        let head = line[0 ..< breakAt]
+        let tail = if breakAt < line.len: line[breakAt .. ^1] else: ""
+        result.add head & (if breakActive.len > 0: "\e[0m" else: "")
+        line = breakActive & tail
+        column -= breakColumn
+      else:
+        if active.len > 0: line.add "\e[0m"
+        result.add line
+        line = active
+        column = 0
+      breakAt = -1
     line.add s[start ..< i]
     column += runeWidth
+    if preferSpaces and rune.int in {9, 32} and column > 0:
+      breakAt = line.len
+      breakColumn = column
+      breakActive = active
   if line.len > 0 or result.len == 0:
     result.add line

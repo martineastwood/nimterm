@@ -23,6 +23,16 @@ type
     paddingTop*: int
     paddingBottom*: int
     scrollOffset*: int
+    wrappedLines: seq[WrappedInputLine]
+    wrappedTextVersion: uint64
+    wrappedWidth: int
+    wrappedPrefix, wrappedContinuationPrefix: string
+    wrappedValid: bool
+    textVersion: uint64
+    cursorCacheTextVersion: uint64
+    cursorCachePosition: int
+    cursorCache: tuple[line, column: int]
+    cursorValid: bool
 
   WrappedInputLine = object
     text: string
@@ -40,6 +50,11 @@ proc newInput*(prefix = "> ", continuationPrefix = "  ",
                cursorBarStyle = defaultCursorStyle()): InputWidget =
   InputWidget(prefix: prefix, continuationPrefix: continuationPrefix,
     style: style, cursorStyle: cursorStyle, cursorBarStyle: cursorBarStyle)
+
+proc invalidateTextLayout(widget: InputWidget) =
+  inc widget.textVersion
+  widget.wrappedValid = false
+  widget.cursorValid = false
 
 method focusable*(widget: InputWidget): bool = true
 
@@ -59,27 +74,32 @@ proc nextPosition(text: string, position: int): int =
 proc clear*(widget: InputWidget) =
   widget.text = ""
   widget.cursor = 0
+  widget.invalidateTextLayout()
 
 proc setText*(widget: InputWidget, text: string) =
   widget.text = text
   widget.cursor = text.len
+  widget.invalidateTextLayout()
 
 proc insert*(widget: InputWidget, piece: string) =
   if piece.len == 0: return
   let p = min(max(widget.cursor, 0), widget.text.len)
   widget.text = widget.text[0 ..< p] & piece & widget.text[p .. ^1]
   widget.cursor = p + piece.len
+  widget.invalidateTextLayout()
 
 proc deleteBefore(widget: InputWidget) =
   if widget.cursor == 0: return
   let start = previousPosition(widget.text, widget.cursor)
   widget.text = widget.text[0 ..< start] & widget.text[widget.cursor .. ^1]
   widget.cursor = start
+  widget.invalidateTextLayout()
 
 proc deleteAfter(widget: InputWidget) =
   if widget.cursor == widget.text.len: return
   let finish = nextPosition(widget.text, widget.cursor)
   widget.text = widget.text[0 ..< widget.cursor] & widget.text[finish .. ^1]
+  widget.invalidateTextLayout()
 
 proc wordBackward(widget: InputWidget) =
   while widget.cursor > 0:
@@ -199,9 +219,31 @@ proc wrappedInputLines(text: string, contentWidth: int,
     lineStart = lineEnd + 1
     inc sourceLine
 
+proc layoutLines(widget: InputWidget, contentWidth: int): seq[WrappedInputLine] =
+  let width = max(1, contentWidth)
+  if not widget.wrappedValid or widget.wrappedTextVersion != widget.textVersion or
+      widget.wrappedWidth != width or widget.wrappedPrefix != widget.prefix or
+      widget.wrappedContinuationPrefix != widget.continuationPrefix:
+    widget.wrappedLines = widget.text.wrappedInputLines(width, widget.prefix,
+      widget.continuationPrefix)
+    widget.wrappedTextVersion = widget.textVersion
+    widget.wrappedWidth = width
+    widget.wrappedPrefix = widget.prefix
+    widget.wrappedContinuationPrefix = widget.continuationPrefix
+    widget.wrappedValid = true
+  widget.wrappedLines
+
+proc cachedCursorLocation(widget: InputWidget): tuple[line, column: int] =
+  if not widget.cursorValid or widget.cursorCacheTextVersion != widget.textVersion or
+      widget.cursorCachePosition != widget.cursor:
+    widget.cursorCache = cursorLocation(widget.text, widget.cursor)
+    widget.cursorCacheTextVersion = widget.textVersion
+    widget.cursorCachePosition = widget.cursor
+    widget.cursorValid = true
+  widget.cursorCache
+
 proc visualLineCount*(widget: InputWidget, contentWidth: int): int =
-  widget.text.wrappedInputLines(contentWidth, widget.prefix,
-    widget.continuationPrefix).len
+  widget.layoutLines(contentWidth).len
 
 proc moveVertical(widget: InputWidget, delta: int) =
   let lines = widget.text.inputLines
@@ -269,9 +311,8 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
   let contentX = widget.area.x + max(0, widget.paddingLeft)
   let contentWidth = max(0, widget.area.w - max(0, widget.paddingLeft) -
     max(0, widget.paddingRight))
-  let lines = widget.text.wrappedInputLines(contentWidth, widget.prefix,
-    widget.continuationPrefix)
-  let cursor = cursorLocation(widget.text, widget.cursor)
+  let lines = widget.layoutLines(contentWidth)
+  let cursor = widget.cachedCursorLocation()
   let contentY = widget.area.y + max(0, widget.paddingTop)
   let contentBottom = widget.area.y + widget.area.h - max(0, widget.paddingBottom)
   let visibleRows = max(1, contentBottom - contentY)

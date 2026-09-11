@@ -20,8 +20,8 @@ suite "terminal input decoding":
     var decoder: InputDecoder
     decoder.feed("\e")
     check decoder.nextEvent(100).key == keyNone
-    check decoder.nextEvent(129).key == keyNone
-    check decoder.nextEvent(130).key == keyEscape
+    check decoder.nextEvent(114).key == keyNone
+    check decoder.nextEvent(115).key == keyEscape
 
   test "decodes several events from one byte chunk":
     var decoder: InputDecoder

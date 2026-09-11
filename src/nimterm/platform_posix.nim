@@ -228,6 +228,8 @@ proc sameCell(a, b: Cell): bool =
 proc frameOutput*(frame, previous: Canvas, force = false): string =
   let full = force or frame.size != previous.size
   var output = newStringOfCap(frame.size.w * frame.size.h * 2)
+  var activeStyle = defaultStyle()
+  var hasStyle = false
   for y in 0 ..< frame.size.h:
     var first = 0
     var last = frame.size.w - 1
@@ -242,8 +244,6 @@ proc frameOutput*(frame, previous: Canvas, force = false): string =
       if last + 1 < frame.size.w and (frame.getCell(last + 1, y).continuation or
           previous.getCell(last + 1, y).continuation): inc last
     output.add "\e[" & $(y + 1) & ";" & $(first + 1) & "H"
-    var activeStyle = defaultStyle()
-    var hasStyle = false
     for x in first .. last:
       let cell = frame.getCell(x, y)
       if not hasStyle or activeStyle != cell.style:
@@ -260,8 +260,8 @@ proc frameOutput*(frame, previous: Canvas, force = false): string =
 
 method present*(backend: PosixBackend, frame: Canvas) =
   let output = frame.frameOutput(backend.previous, not backend.hasPrevious)
+  if output.len == 0: return
   backend.previous = frame.copy
   backend.hasPrevious = true
-  if output.len == 0: return
   stdout.write(output)
   stdout.flushFile()

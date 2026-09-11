@@ -28,6 +28,10 @@ type
     boldAccent*, boldError*: string
     reset*: string
 
+  ThemeNameCache = object
+    workspace, appDir, globalDir: string
+    names: seq[string]
+
 const
   TokenNames = [
     "accent", "success", "error", "warning", "muted", "dim", "text",
@@ -87,7 +91,12 @@ const
   )
 
 var currentTheme* = Dark256
+var themeRevision* = 0
 var activeDepth = cd256
+var themeNameCaches: seq[ThemeNameCache]
+
+proc clearThemeNameCache*() =
+  themeNameCaches.setLen(0)
 
 proc colorsOn*(t: Theme): bool =
   t.reset.len > 0
@@ -397,10 +406,16 @@ proc discoverThemes(workspace, appDir, globalDir: string): seq[ThemeSpec] =
         result.add loaded.spec
 
 proc listThemeNames*(workspace = "", appDir = ".nimterm", globalDir = ""): seq[string] =
+  for cache in themeNameCaches:
+    if cache.workspace == workspace and cache.appDir == appDir and
+        cache.globalDir == globalDir:
+      return cache.names
   result = @["auto", "dark", "light"]
   for spec in discoverThemes(workspace, appDir, globalDir):
     if spec.name.toLowerAscii notin ["auto", "dark", "light"]:
       result.add spec.name
+  themeNameCaches.add ThemeNameCache(workspace: workspace, appDir: appDir,
+    globalDir: globalDir, names: result)
 
 proc findUserTheme*(name, workspace: string, appDir = ".nimterm",
                     globalDir = ""): tuple[ok: bool, spec: ThemeSpec, err: string] =
@@ -443,6 +458,8 @@ proc applyTheme*(name: string, depth = activeDepth, workspace = "",
     return compiled.err
   activeDepth = depth
   currentTheme = compiled.theme
+  clearThemeNameCache()
+  inc themeRevision
   ""
 
 proc cardRail(t: Theme, fg: string): string =

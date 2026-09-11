@@ -346,7 +346,7 @@ proc feed*(decoder: var InputDecoder, bytes: string) =
 proc pending*(decoder: InputDecoder): bool = decoder.buffer.len > 0
 
 proc escapeWaitMs*(decoder: InputDecoder, nowMs: int64,
-                   timeoutMs = 30): int =
+                   timeoutMs = 15): int =
   if decoder.buffer.len == 0 or decoder.buffer[0] != '\e': return -1
   if decoder.escapeStartedMs <= 0: return timeoutMs
   max(0, timeoutMs - int(nowMs - decoder.escapeStartedMs))
@@ -375,7 +375,7 @@ proc sequenceLength(decoder: var InputDecoder, nowMs: int64,
   if nowMs - decoder.escapeStartedMs >= escapeTimeoutMs: return 1
 
 proc nextEvent*(decoder: var InputDecoder, nowMs: int64,
-                escapeTimeoutMs = 30): InputEvent =
+                escapeTimeoutMs = 15): InputEvent =
   let length = decoder.sequenceLength(nowMs, escapeTimeoutMs)
   if length == 0: return InputEvent(key: keyNone)
   let bytes = decoder.buffer[0 ..< length]

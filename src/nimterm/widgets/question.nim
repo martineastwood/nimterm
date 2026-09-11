@@ -48,6 +48,10 @@ proc newQuestion*(prompt: string, options: seq[QuestionOption],
 method focusable*(widget: QuestionWidget): bool = not widget.resolved
 method modal*(widget: QuestionWidget): bool = not widget.resolved
 
+method allowsBackgroundEvent*(widget: QuestionWidget, event: UiEvent): bool =
+  (event.kind == uiKey and event.key in {keyPageUp, keyPageDown}) or
+    (event.kind == uiMouse and event.scrollDelta != 0)
+
 proc optionCount(widget: QuestionWidget): int =
   widget.options.len + (if widget.allowFreeText: 1 else: 0)
 

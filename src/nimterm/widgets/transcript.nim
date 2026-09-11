@@ -34,11 +34,29 @@ type
     selectionEndCol*: int
     toolDetails*: proc (name: string, input: JsonNode,
                         output: string): seq[string] {.closure.}
+    cachedWidth: int
+    linesValid: bool
+    itemCaches: seq[TranscriptItemCache]
+    itemStarts: seq[int]
+    totalLineCount: int
 
   TranscriptLine = object
     text: string
     style: Style
     railStyle: Style
+
+  TranscriptItemCache = object
+    revision: int
+    width: int
+    lines: seq[TranscriptLine]
+    sourceRevision: int
+    sourceLines: seq[string]
+    streaming: bool
+    streamKind: transcript_model.TranscriptItemKind
+    streamModel: string
+    streamTextLen: int
+    streamRawLines: seq[string]
+    streamTailRows: int
 
 proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           userStyle = defaultStyle(),
@@ -51,6 +69,30 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
     toolStyle: toolStyle, errorStyle: errorStyle,
     viewport: newScrollView(), selectionStart: -1,
     selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
+
+proc invalidateLines*(widget: TranscriptWidget) =
+  widget.linesValid = false
+  for cache in widget.itemCaches.mitems:
+    cache.revision = -1
+    cache.sourceRevision = -1
+
+proc invalidateLayout(widget: TranscriptWidget) =
+  widget.linesValid = false
+
+proc appendUser*(widget: TranscriptWidget, text: string) =
+  widget.transcript.appendUser(text)
+  widget.invalidateLayout()
+
+proc appendStatus*(widget: TranscriptWidget, text: string) =
+  widget.transcript.items.add TranscriptItem(kind: tikStatus, text: text)
+  widget.invalidateLayout()
+
+proc setTranscript*(widget: TranscriptWidget,
+                    transcript: transcript_model.Transcript) =
+  widget.transcript = transcript
+  widget.itemCaches.setLen(0)
+  widget.itemStarts.setLen(0)
+  widget.invalidateLines()
 
 method focusable*(widget: TranscriptWidget): bool = true
 
@@ -130,24 +172,160 @@ proc wrapTranscriptLine(text: string, width: int): seq[string] =
 
 proc apply*(widget: TranscriptWidget, event: AgentUiEvent) =
   widget.transcript.apply(event)
+  widget.invalidateLayout()
 
 proc awaitingApproval*(widget: TranscriptWidget): bool =
   for item in widget.transcript.items:
     if item.approvalRequired:
       return true
 
-proc allLines(widget: TranscriptWidget): seq[TranscriptLine] =
-  for item in widget.transcript.items:
-    if result.len > 0:
-      result.add TranscriptLine(style: defaultStyle(), railStyle: defaultStyle())
-    let style = widget.itemStyle(item.kind)
-    let railStyle = widget.itemRailStyle(item.kind)
-    result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
-    for line in widget.itemLines(item):
-      for wrapped in wrapTranscriptLine(line, widget.area.w):
-        result.add TranscriptLine(text: wrapped, style: style,
+proc appendStreamingText(widget: TranscriptWidget,
+                         item: transcript_model.TranscriptItem,
+                         cache: var TranscriptItemCache) =
+  if cache.streamTextLen > item.text.len: return
+  let oldRawCount = cache.streamRawLines.len
+  if oldRawCount > 0:
+    if cache.lines.len > 0: cache.lines.setLen(cache.lines.len - 1)
+    if cache.streamTailRows > 0:
+      cache.lines.setLen(cache.lines.len - cache.streamTailRows)
+  else:
+    cache.streamRawLines.add ""
+  if cache.streamTextLen < item.text.len:
+    let delta = item.text[cache.streamTextLen .. ^1]
+    var start = 0
+    for i, ch in delta:
+      if ch != '\n': continue
+      cache.streamRawLines[^1].add delta[start ..< i]
+      if cache.streamRawLines[^1].endsWith("\r"):
+        cache.streamRawLines[^1].setLen(cache.streamRawLines[^1].len - 1)
+      cache.streamRawLines.add ""
+      start = i + 1
+    if start < delta.len:
+      cache.streamRawLines[^1].add delta[start .. ^1]
+    cache.streamTextLen = item.text.len
+  let first = max(0, oldRawCount - 1)
+  for i in first ..< cache.streamRawLines.len:
+    for wrapped in wrapTranscriptLine("│ " & cache.streamRawLines[i],
+                                      widget.area.w):
+      cache.lines.add TranscriptLine(text: wrapped,
+        style: widget.itemStyle(item.kind),
+        railStyle: widget.itemRailStyle(item.kind))
+  cache.streamTailRows = 0
+  if cache.streamRawLines.len > 0:
+    cache.streamTailRows = wrapTranscriptLine(
+      "│ " & cache.streamRawLines[^1], widget.area.w).len
+  cache.lines.add TranscriptLine(text: "│",
+    style: widget.itemStyle(item.kind), railStyle: widget.itemRailStyle(item.kind))
+
+proc buildStreamingCache(widget: TranscriptWidget,
+                         item: transcript_model.TranscriptItem,
+                         cache: var TranscriptItemCache) =
+  cache.lines.setLen(0)
+  cache.lines.add TranscriptLine(text: "│",
+    style: widget.itemStyle(item.kind), railStyle: widget.itemRailStyle(item.kind))
+  let heading = if item.kind == transcript_model.tikAssistant:
+    "│ " & (if item.model.len > 0: item.model else: "Assistant")
+  else:
+    "│ Thinking"
+  for wrapped in wrapTranscriptLine(heading, widget.area.w):
+    cache.lines.add TranscriptLine(text: wrapped,
+      style: widget.itemStyle(item.kind),
+      railStyle: widget.itemRailStyle(item.kind))
+  cache.streaming = true
+  cache.streamKind = item.kind
+  cache.streamModel = item.model
+  cache.streamTextLen = 0
+  cache.streamRawLines.setLen(0)
+  cache.streamTailRows = 0
+  appendStreamingText(widget, item, cache)
+
+proc rebuildStreamingWidth(widget: TranscriptWidget,
+                           item: transcript_model.TranscriptItem,
+                           cache: var TranscriptItemCache) =
+  cache.lines.setLen(0)
+  let style = widget.itemStyle(item.kind)
+  let railStyle = widget.itemRailStyle(item.kind)
+  cache.lines.add TranscriptLine(text: "│", style: style,
+    railStyle: railStyle)
+  let heading = if item.kind == transcript_model.tikAssistant:
+    "│ " & (if item.model.len > 0: item.model else: "Assistant")
+  else:
+    "│ Thinking"
+  for wrapped in wrapTranscriptLine(heading, widget.area.w):
+    cache.lines.add TranscriptLine(text: wrapped, style: style,
+      railStyle: railStyle)
+  for raw in cache.streamRawLines:
+    for wrapped in wrapTranscriptLine("│ " & raw, widget.area.w):
+      cache.lines.add TranscriptLine(text: wrapped, style: style,
+        railStyle: railStyle)
+  cache.streamTailRows = if cache.streamRawLines.len == 0: 0 else:
+    wrapTranscriptLine("│ " & cache.streamRawLines[^1], widget.area.w).len
+  cache.lines.add TranscriptLine(text: "│", style: style,
+    railStyle: railStyle)
+
+proc ensureLayout(widget: TranscriptWidget) =
+  if widget.linesValid and widget.cachedWidth == widget.area.w:
+    return
+  if widget.itemCaches.len != widget.transcript.items.len:
+    widget.itemCaches.setLen(widget.transcript.items.len)
+  widget.itemStarts.setLen(widget.transcript.items.len)
+  var total = 0
+  for i, item in widget.transcript.items:
+    let cache = addr widget.itemCaches[i]
+    if cache[].revision != item.revision or cache[].width != widget.area.w:
+      let canStream = cache[].streaming and cache[].revision >= 0 and
+        item.pending and
+        item.kind in {transcript_model.tikAssistant,
+                      transcript_model.tikThinking} and
+        cache[].streamKind == item.kind and cache[].streamModel == item.model
+      if canStream:
+        if cache[].width == widget.area.w:
+          appendStreamingText(widget, item, cache[])
+        else:
+          rebuildStreamingWidth(widget, item, cache[])
+      else:
+        cache[].lines.setLen(0)
+        let style = widget.itemStyle(item.kind)
+        let railStyle = widget.itemRailStyle(item.kind)
+        cache[].lines.add TranscriptLine(text: "│", style: style,
           railStyle: railStyle)
-    result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
+        if cache[].sourceRevision != item.revision or cache[].sourceLines.len == 0:
+          cache[].sourceLines = widget.itemLines(item)
+          cache[].sourceRevision = item.revision
+        for line in cache[].sourceLines:
+          for wrapped in wrapTranscriptLine(line, widget.area.w):
+            cache[].lines.add TranscriptLine(text: wrapped, style: style,
+              railStyle: railStyle)
+        cache[].lines.add TranscriptLine(text: "│", style: style,
+          railStyle: railStyle)
+        cache[].streaming = false
+      cache[].revision = item.revision
+      cache[].width = widget.area.w
+    if i > 0: inc total
+    widget.itemStarts[i] = total
+    total += cache[].lines.len
+  widget.totalLineCount = total
+  widget.cachedWidth = widget.area.w
+  widget.linesValid = true
+
+proc lineCount(widget: TranscriptWidget): int =
+  widget.ensureLayout()
+  widget.totalLineCount
+
+proc lineAt(widget: TranscriptWidget, index: int): TranscriptLine =
+  widget.ensureLayout()
+  if index < 0 or index >= widget.totalLineCount: return
+  var lo = 0
+  var hi = widget.itemStarts.high
+  while lo <= hi:
+    let mid = (lo + hi) div 2
+    if widget.itemStarts[mid] <= index: lo = mid + 1
+    else: hi = mid - 1
+  if hi >= 0:
+    let local = index - widget.itemStarts[hi]
+    if local < widget.itemCaches[hi].lines.len:
+      return widget.itemCaches[hi].lines[local]
+  TranscriptLine(style: defaultStyle(), railStyle: defaultStyle())
 
 proc selectionColumns(widget: TranscriptWidget, line: int): tuple[lo, hi: int] =
   result = (-1, -1)
@@ -188,13 +366,13 @@ proc lineSelected(widget: TranscriptWidget, index: int): bool =
   bounds.lo >= 0
 
 proc selectedText*(widget: TranscriptWidget): string =
-  let lines = widget.allLines
-  if widget.selectionStart < 0 or widget.selectionEnd < 0 or lines.len == 0:
+  let count = widget.lineCount()
+  if widget.selectionStart < 0 or widget.selectionEnd < 0 or count == 0:
     return ""
   let first = max(0, min(widget.selectionStart, widget.selectionEnd))
-  let last = min(lines.high, max(widget.selectionStart, widget.selectionEnd))
+  let last = min(count - 1, max(widget.selectionStart, widget.selectionEnd))
   for i in first .. last:
-    var line = stripAnsi(lines[i].text)
+    var line = stripAnsi(widget.lineAt(i).text)
     var prefixColumns = 0
     let railPrefix = "│ "
     let statusPrefix = "· "
@@ -221,11 +399,11 @@ proc copySelection*(widget: TranscriptWidget): EventResponse =
   widget.actionHandled("copy", text)
 
 proc scrollBy*(widget: TranscriptWidget, delta: int) =
-  widget.viewport.update(widget.allLines.len, widget.area.h)
+  widget.viewport.update(widget.lineCount(), widget.area.h)
   widget.viewport.scrollBy(-delta)
 
 method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
-  widget.viewport.update(widget.allLines.len, widget.area.h)
+  widget.viewport.update(widget.lineCount(), widget.area.h)
   case event.kind
   of uiKey:
     case event.key
@@ -247,6 +425,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
         if selected < 0: return eventIgnored
         let choice = widget.transcript.items[i].approvalChoices[selected]
         widget.transcript.items[i].approvalRequired = false
+        widget.invalidateLines()
         return widget.actionHandled("approval", choice.id,
           targetId = widget.transcript.items[i].id)
       return eventIgnored
@@ -255,6 +434,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
         if not widget.transcript.items[i].approvalRequired: continue
         let choiceId = widget.transcript.items[i].cancelChoiceId
         widget.transcript.items[i].approvalRequired = false
+        widget.invalidateLines()
         return widget.actionHandled("approval", choiceId,
           targetId = widget.transcript.items[i].id)
       return eventIgnored
@@ -279,7 +459,8 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
         if item.kind == tikTool and (item.text.splitLines.len > 2 or
             details.len > 2):
           item.expanded = expand
-      widget.viewport.update(widget.allLines.len, widget.area.h)
+      widget.invalidateLines()
+      widget.viewport.update(widget.lineCount(), widget.area.h)
       return eventHandled
     else:
       return eventIgnored
@@ -289,7 +470,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
       return eventHandled
     if not widget.area.contains(event.x, event.y): return eventIgnored
     let line = widget.viewport.offset + event.y - widget.area.y
-    if line < 0 or line >= widget.allLines.len: return eventIgnored
+    if line < 0 or line >= widget.lineCount(): return eventIgnored
     case event.mouse
     of umPress:
       widget.selectionStart = line
@@ -329,17 +510,18 @@ method measure*(widget: TranscriptWidget, constraints: Constraints): Size =
   constraints.clamp(size(width, height))
 
 method paint*(widget: TranscriptWidget, canvas: var Canvas) =
-  let lines = widget.allLines
-  widget.viewport.update(lines.len, widget.area.h)
+  let count = widget.lineCount()
+  widget.viewport.update(count, widget.area.h)
   let start = widget.viewport.offset
+  let stop = min(count, start + widget.area.h)
+  if start >= stop: return
   var y = widget.area.y
-  for i in start ..< lines.len:
-    if y >= widget.area.y + widget.area.h: return
-    let lineStyle = lines[i].style
-    let railStyle = lines[i].railStyle
+  for i in start ..< stop:
+    let line = widget.lineAt(i)
+    let lineStyle = line.style
+    let railStyle = line.railStyle
     for x in widget.area.x ..< widget.area.x + widget.area.w:
       canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
-    let line = lines[i]
     if line.text.startsWith("▌") or line.text.startsWith("│"):
       let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
       let rail = line.text[0 ..< railLen]

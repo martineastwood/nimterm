@@ -26,6 +26,8 @@ method enabled*(widget: Widget): bool {.base.} = true
 
 method modal*(widget: Widget): bool {.base.} = false
 
+method allowsBackgroundEvent*(widget: Widget, event: UiEvent): bool {.base.} = false
+
 const
   eventIgnored* = EventResponse()
   eventHandled* = EventResponse(handled: true)

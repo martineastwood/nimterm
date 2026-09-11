@@ -2,6 +2,7 @@
 
 import std/strutils
 from std/unicode import Rune
+import ../ansi
 import ../canvas
 import ../geometry
 import ../style
@@ -25,7 +26,7 @@ method measure*(widget: Card, constraints: Constraints): Size =
   var height = 1
   for line in widget.body.splitLines:
     width = max(width, line.len + 4)
-    inc height
+    height += wrapAnsi(line, max(1, constraints.maxSize.w - 2), true).len
   constraints.clamp(size(width, height))
 
 method paint*(widget: Card, canvas: var Canvas) =
@@ -43,7 +44,8 @@ method paint*(widget: Card, canvas: var Canvas) =
       widget.titleStyle, max(0, widget.area.w - 2))
   var y = widget.area.y + 1
   for line in widget.body.splitLines:
-    if y > bottom: break
-    canvas.writeText(widget.area.x + 1, y, line, widget.style,
-      max(0, widget.area.w - 2))
-    inc y
+    for wrapped in wrapAnsi(line, max(1, widget.area.w - 2), true):
+      if y > bottom: break
+      canvas.writeText(widget.area.x + 1, y, wrapped, widget.style,
+        max(0, widget.area.w - 2))
+      inc y

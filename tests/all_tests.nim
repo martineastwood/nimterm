@@ -698,6 +698,15 @@ suite "transcript":
     diff.render(canvas, rect(0, 8, 20, 3))
     check "+ new" in canvas.plainText
 
+  test "cards wrap long body lines":
+    let card = newCard("status", "a long body line")
+    var canvas = newCanvas(size(10, 4))
+    check card.measure(Constraints(maxSize: size(10, 4))).h == 4
+    card.render(canvas, rect(0, 0, 10, 4))
+    check "a long" in canvas.plainText
+    check "body" in canvas.plainText
+    check "line" in canvas.plainText
+
   test "recedes thinking and makes tool status scannable":
     let view = newTranscriptWidget()
     view.apply AgentUiEvent(kind: ueThinkingDelta, runId: "run", step: 0,

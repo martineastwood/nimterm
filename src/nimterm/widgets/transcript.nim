@@ -11,6 +11,7 @@ import ../markdown as markdown_renderer
 import ../style
 import ../transcript as transcript_model
 import ../widget
+import ./scroll
 
 type
   TranscriptWidget* = ref object of Widget
@@ -26,7 +27,7 @@ type
     toolRailStyle*: Style
     errorRailStyle*: Style
     selectionStyle*: Style
-    scrollOffset*: int
+    viewport*: ScrollView
     selectionStart*: int
     selectionEnd*: int
     selectionStartCol*: int
@@ -47,7 +48,8 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           errorStyle = defaultStyle()): TranscriptWidget =
   TranscriptWidget(transcript: transcript, userStyle: userStyle,
     assistantStyle: assistantStyle, thinkingStyle: thinkingStyle,
-    toolStyle: toolStyle, errorStyle: errorStyle, selectionStart: -1,
+    toolStyle: toolStyle, errorStyle: errorStyle,
+    viewport: newScrollView(), selectionStart: -1,
     selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
 
 method focusable*(widget: TranscriptWidget): bool = true
@@ -126,11 +128,6 @@ proc wrapTranscriptLine(text: string, width: int): seq[string] =
   for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix))):
     result.add prefix & chunk
 
-proc cachedItemLines(widget: TranscriptWidget, index: int,
-                     item: transcript_model.TranscriptItem): seq[string] =
-  discard index
-  widget.itemLines(item)
-
 proc apply*(widget: TranscriptWidget, event: AgentUiEvent) =
   widget.transcript.apply(event)
 
@@ -140,20 +137,17 @@ proc awaitingApproval*(widget: TranscriptWidget): bool =
       return true
 
 proc allLines(widget: TranscriptWidget): seq[TranscriptLine] =
-  for index, item in widget.transcript.items:
+  for item in widget.transcript.items:
     if result.len > 0:
       result.add TranscriptLine(style: defaultStyle(), railStyle: defaultStyle())
     let style = widget.itemStyle(item.kind)
     let railStyle = widget.itemRailStyle(item.kind)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
-    for line in widget.cachedItemLines(index, item):
+    for line in widget.itemLines(item):
       for wrapped in wrapTranscriptLine(line, widget.area.w):
         result.add TranscriptLine(text: wrapped, style: style,
           railStyle: railStyle)
     result.add TranscriptLine(text: "│", style: style, railStyle: railStyle)
-
-proc visibleStart(widget: TranscriptWidget): int =
-  max(0, widget.allLines.len - widget.area.h - widget.scrollOffset)
 
 proc selectionColumns(widget: TranscriptWidget, line: int): tuple[lo, hi: int] =
   result = (-1, -1)
@@ -226,21 +220,23 @@ proc copySelection*(widget: TranscriptWidget): EventResponse =
   if text.len == 0: return eventIgnored
   widget.actionHandled("copy", text)
 
-proc maxScroll(widget: TranscriptWidget): int =
-  max(0, widget.allLines.len - widget.area.h)
-
 proc scrollBy*(widget: TranscriptWidget, delta: int) =
-  widget.scrollOffset = clamp(widget.scrollOffset + delta, 0,
-    widget.maxScroll)
+  widget.viewport.update(widget.allLines.len, widget.area.h)
+  widget.viewport.scrollBy(-delta)
 
 method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
+  widget.viewport.update(widget.allLines.len, widget.area.h)
   case event.kind
   of uiKey:
     case event.key
     of keyPageUp, keyCtrlB:
-      widget.scrollBy(max(1, widget.area.h div 2))
+      widget.viewport.pageBy(-1)
     of keyPageDown, keyCtrlF:
-      widget.scrollBy(-max(1, widget.area.h div 2))
+      widget.viewport.pageBy(1)
+    of keyHome:
+      widget.viewport.home()
+    of keyEnd:
+      widget.viewport.tail()
     of keyChar, keyEnter:
       for i in countdown(widget.transcript.items.high, 0):
         if not widget.transcript.items[i].approvalRequired: continue
@@ -283,7 +279,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
         if item.kind == tikTool and (item.text.splitLines.len > 2 or
             details.len > 2):
           item.expanded = expand
-      widget.scrollOffset = 0
+      widget.viewport.update(widget.allLines.len, widget.area.h)
       return eventHandled
     else:
       return eventIgnored
@@ -292,7 +288,7 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
       widget.scrollBy(event.scrollDelta)
       return eventHandled
     if not widget.area.contains(event.x, event.y): return eventIgnored
-    let line = widget.visibleStart + event.y - widget.area.y
+    let line = widget.viewport.offset + event.y - widget.area.y
     if line < 0 or line >= widget.allLines.len: return eventIgnored
     case event.mouse
     of umPress:
@@ -326,15 +322,16 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
 method measure*(widget: TranscriptWidget, constraints: Constraints): Size =
   var height = 0
   var width = 0
-  for index, item in widget.transcript.items:
-    for line in widget.cachedItemLines(index, item):
+  for item in widget.transcript.items:
+    for line in widget.itemLines(item):
       width = max(width, ansiVisibleWidth(line))
       inc height
   constraints.clamp(size(width, height))
 
 method paint*(widget: TranscriptWidget, canvas: var Canvas) =
   let lines = widget.allLines
-  let start = max(0, lines.len - widget.area.h - widget.scrollOffset)
+  widget.viewport.update(lines.len, widget.area.h)
+  let start = widget.viewport.offset
   var y = widget.area.y
   for i in start ..< lines.len:
     if y >= widget.area.y + widget.area.h: return

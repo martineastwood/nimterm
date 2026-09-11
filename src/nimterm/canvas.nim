@@ -43,6 +43,16 @@ proc clear*(canvas: var Canvas, fill = blankCell()) =
   for i in 0 ..< canvas.cells.len:
     canvas.cells[i] = fill
 
+proc fill*(canvas: var Canvas, area: Rect, cell = blankCell()) =
+  for y in max(0, area.y) ..< min(canvas.size.h, area.y + area.h):
+    for x in max(0, area.x) ..< min(canvas.size.w, area.x + area.w):
+      canvas.cells[canvas.cellIndex(x, y)] = cell
+
+proc copy*(canvas: Canvas): Canvas =
+  result.size = canvas.size
+  result.cells = newSeq[Cell](canvas.cells.len)
+  for i, cell in canvas.cells: result.cells[i] = cell
+
 proc writeText*(canvas: var Canvas, x, y: int, text: string,
                 style = defaultStyle(), maxWidth = int.high) =
   var col = x

@@ -1,4 +1,5 @@
 import std/[json, strutils, unittest]
+from std/unicode import Rune
 import nimterm/[ansi, app, backend, canvas, events, geometry, input, markdown, keys,
   style, text_width, theme, transcript, widget, widgets]
 import nimterm/term
@@ -55,6 +56,15 @@ suite "terminal input decoding":
     check decodeBytes("\e[111;5u").key == keyCtrlO
     check decodeBytes("\e[13;2u").key == keyShiftEnter
 
+  test "decodes function, insert, and control keys":
+    check decodeBytes("\eOP").key == keyF1
+    check decodeBytes("\e[15~").key == keyF5
+    check decodeBytes("\e[24~").key == keyF12
+    check decodeBytes("\e[2~").key == keyInsert
+    check decodeBytes("\x04").key == keyCtrlD
+    check decodeBytes("\x0b").key == keyCtrlK
+    check decodeBytes("\x1a").key == keyCtrlZ
+
   test "decodes bracketed paste as one normalized text event":
     let event = decodeBytes("\e[200~one\r\ntwo\rthree\e[201~")
     check event.key == keyChar
@@ -67,6 +77,9 @@ suite "terminal input decoding":
     check decodeBytes("\e[<32;3;4M").mouse == mouseDrag
     check decodeBytes("\e[<0;3;4m").mouse == mouseRelease
     check decodeBytes("\e[<65;3;4M").scrollDelta == -3
+    let modified = decodeBytes("\e[<30;3;4M")
+    check modified.button == umbRight
+    check modified.shift and modified.alt and modified.ctrl
 
   test "keeps UTF-8 bytes together and tolerates an incomplete rune":
     check decodeBytes("界").text == "界"
@@ -137,15 +150,47 @@ suite "themes":
     }
     check parseThemeJson(doc).ok
 
+suite "scroll view":
+  test "follows appended content only while anchored at the tail":
+    var view = newScrollView()
+    view.update(10, 3)
+    check view.offset == 7
+    view.scrollBy(-2)
+    check not view.followTail
+    check view.offset == 5
+    view.update(12, 3)
+    check view.offset == 5
+    view.tail()
+    view.update(14, 3)
+    check view.offset == 11
+
+  test "clamps after content and viewport resize":
+    var view = newScrollView(false)
+    view.update(20, 5)
+    view.scrollBy(6)
+    view.update(4, 8)
+    check view.offset == 0
+    check view.visibleRange == 0 .. 3
+
 type
   FakeBackend = ref object of TerminalBackend
     presented: Canvas
     events: seq[UiEvent]
+    lastTimeout: int
+    wakeCount: int
+
+  FailingBackend = ref object of TerminalBackend
+    shutdownCalled: bool
+
+method init(backend: FailingBackend) =
+  raise newException(IOError, "init failed")
+
+method shutdown(backend: FailingBackend) = backend.shutdownCalled = true
 
 method size(backend: FakeBackend): Size = size(12, 4)
 
 method readEvent(backend: FakeBackend, timeoutMs: int): UiEvent =
-  discard timeoutMs
+  backend.lastTimeout = timeoutMs
   if backend.events.len == 0:
     return UiEvent(kind: uiNone)
   result = backend.events[0]
@@ -153,6 +198,8 @@ method readEvent(backend: FakeBackend, timeoutMs: int): UiEvent =
 
 method present(backend: FakeBackend, frame: Canvas) =
   backend.presented = frame
+
+method wake(backend: FakeBackend) = inc backend.wakeCount
 
 type FakeSource = ref object of EventSource
   events: seq[UiEvent]
@@ -202,6 +249,32 @@ method paint(widget: Probe, canvas: var Canvas) =
   for child in widget.kids: child.render(canvas, widget.area)
 
 suite "core canvas and app":
+  test "failed backend initialization still shuts down":
+    let backend = FailingBackend()
+    var app = newApp(backend)
+    expect IOError: app.run()
+    check backend.shutdownCalled
+
+  test "posting wakes the backend and preserves queue order":
+    let backend = FakeBackend()
+    var app = newApp(backend)
+    var seen: seq[string]
+    app.onEvent = proc (_: var App, event: UiEvent): EventResponse =
+      if event.kind == uiTimer: seen.add event.timerId
+      eventIgnored
+    app.post UiEvent(kind: uiTimer, timerId: "first")
+    app.post UiEvent(kind: uiTimer, timerId: "second")
+    check backend.wakeCount == 2
+    check app.step()
+    check app.step()
+    check seen == @["first", "second"]
+
+  test "an idle step can block without a polling deadline":
+    let backend = FakeBackend()
+    var app = newApp(backend)
+    check not app.step(-1)
+    check backend.lastTimeout == -1
+
   test "event source failures become events and disable the source":
     let backend = FakeBackend()
     let source = FailingSource(id: "broken")
@@ -238,17 +311,55 @@ suite "core canvas and app":
 
   test "constructs the POSIX backend without entering raw mode":
     check not newPosixBackend().isNil
+    check not newPosixBackend(fullscreen = false).isNil
 
   test "canvas writes text into a stable snapshot":
     var canvas = newCanvas(size(8, 2))
     canvas.writeText(1, 0, "hi")
     check canvas.plainText == " hi     \n        "
 
+  test "canvas fills a clipped rectangle":
+    var canvas = newCanvas(size(4, 2))
+    canvas.fill(rect(2, -1, 4, 3), Cell(glyph: Rune(ord('x'))))
+    check canvas.plainText == "  xx\n  xx"
+
   test "canvas reserves wide cells and joins combining marks":
     var canvas = newCanvas(size(4, 1))
     canvas.writeText(0, 0, "界e\u0301")
     check canvas.getCell(1, 0).continuation
     check canvas.getCell(2, 0).combining.len > 0
+
+  when not defined(windows):
+    test "differential frames skip unchanged cells and isolate damage":
+      let previous = newCanvas(size(4, 2))
+      var frame = previous.copy
+      check frameOutput(frame, previous) == ""
+      frame.writeText(2, 1, "X")
+      check frameOutput(frame, previous) == "\e[2;3H\e[0mX\e[0m"
+
+    test "differential frames clear tails and preserve wide boundaries":
+      var previous = newCanvas(size(5, 1))
+      previous.writeText(0, 0, "abcde")
+      var frame = newCanvas(size(5, 1))
+      frame.writeText(0, 0, "a")
+      check frameOutput(frame, previous) == "\e[1;2H\e[0m    \e[0m"
+      previous = newCanvas(size(5, 1))
+      frame = previous.copy
+      frame.writeText(1, 0, "界")
+      check frameOutput(frame, previous) == "\e[1;2H\e[0m界\e[0m"
+
+    test "differential frames retain combining marks and style changes":
+      let previous = newCanvas(size(3, 1))
+      var frame = previous.copy
+      frame.writeText(0, 0, "e\u0301", defaultStyle().withForeground(ansi16(1)))
+      frame.writeText(1, 0, "x")
+      check frameOutput(frame, previous) ==
+        "\e[1;1H\e[0m\e[31me\u0301\e[0mx\e[0m"
+
+    test "differential frames fully redraw after resize":
+      let previous = newCanvas(size(1, 1))
+      let frame = newCanvas(size(2, 1))
+      check frameOutput(frame, previous) == "\e[1;1H\e[0m  \e[0m"
 
   test "run drains and closes event sources":
     let source = FakeSource(events: @[quitEvent()])
@@ -467,6 +578,26 @@ suite "core canvas and app":
     check "○ two" in canvas.plainText
 
 suite "transcript":
+  test "streaming preserves manual position and follows an active tail":
+    let widget = newTranscriptWidget()
+    widget.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "one\ntwo\nthree\nfour\nfive\nsix")
+    var canvas = newCanvas(size(20, 4))
+    widget.render(canvas, rect(0, 0, 20, 4))
+    let firstTail = widget.viewport.offset
+    check widget.viewport.followTail
+    widget.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "\nseven")
+    widget.render(canvas, rect(0, 0, 20, 4))
+    check widget.viewport.offset > firstTail
+    discard widget.handle(UiEvent(kind: uiKey, key: keyPageUp))
+    let anchored = widget.viewport.offset
+    check not widget.viewport.followTail
+    widget.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "\neight")
+    widget.render(canvas, rect(0, 0, 20, 4))
+    check widget.viewport.offset == anchored
+
   test "reduces a streamed agent turn into stable items":
     var transcript = newTranscript()
     transcript.apply AgentUiEvent(kind: ueRunStarted, runId: "run-1",
@@ -653,3 +784,22 @@ suite "transcript":
     canvas.clear()
     view.render(canvas, rect(0, 0, 30, 10))
     check "+ three" in canvas.plainText
+
+  test "Ctrl-O preserves a manually scrolled viewport":
+    let view = newTranscriptWidget()
+    view.toolDetails = proc (name: string, input: JsonNode,
+                             output: string): seq[string] =
+      @["one", "two", "three", "four"]
+    view.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "a\nb\nc\nd\ne\nf")
+    view.apply AgentUiEvent(kind: ueToolCalled, toolId: "call",
+      toolName: "read", toolInput: %*{})
+    view.apply AgentUiEvent(kind: ueToolResult, toolId: "call",
+      toolOutput: "OK")
+    var canvas = newCanvas(size(30, 4))
+    view.render(canvas, rect(0, 0, 30, 4))
+    discard view.handle(UiEvent(kind: uiKey, key: keyPageUp))
+    let anchored = view.viewport.offset
+    check not view.viewport.followTail
+    check view.handle(UiEvent(kind: uiKey, key: keyCtrlO)) == eventHandled
+    check view.viewport.offset == anchored

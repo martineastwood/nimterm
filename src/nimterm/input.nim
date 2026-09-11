@@ -32,6 +32,10 @@ type
     scrollDelta*: int   ## +N scroll up (older), -N scroll down (newer)
     resized*: bool
     mouse*: MouseKind
+    button*: UiMouseButton
+    shift*: bool
+    alt*: bool
+    ctrl*: bool
     mouseX*: int        ## 0-based column
     mouseY*: int        ## 0-based row
     focus*: FocusKind
@@ -84,6 +88,9 @@ proc parseSgrMouse(params: string, press: bool): InputEvent =
     return
   result.mouseX = max(0, x - 1)
   result.mouseY = max(0, y - 1)
+  result.shift = (btn and 4) != 0
+  result.alt = (btn and 8) != 0
+  result.ctrl = (btn and 16) != 0
 
   # Wheel: bit 6 set. Low bit selects direction (0=up, 1=down).
   if (btn and 64) != 0:
@@ -94,8 +101,11 @@ proc parseSgrMouse(params: string, press: bool): InputEvent =
     return
 
   let button = btn and 3
-  if button != 0:
-    return  # ignore middle/right for now
+  result.button = case button
+    of 0: umbLeft
+    of 1: umbMiddle
+    of 2: umbRight
+    else: umbNone
 
   if not press:
     result.mouse = mouseRelease
@@ -109,63 +119,55 @@ proc ctrlKey(b: int): Key =
   of 1: keyCtrlA
   of 2: keyCtrlB
   of 3: keyCtrlC
+  of 4: keyCtrlD
   of 5: keyCtrlE
   of 6: keyCtrlF
+  of 7: keyCtrlG
+  of 8: keyCtrlH
   of 9: keyTab
+  of 11: keyCtrlK
+  of 12: keyCtrlL
   of 14: keyCtrlN
   of 15: keyCtrlO
   of 16: keyCtrlP
+  of 17: keyCtrlQ
+  of 18: keyCtrlR
+  of 19: keyCtrlS
+  of 20: keyCtrlT
   of 21: keyCtrlU
   of 22: keyCtrlV
+  of 23: keyCtrlW
+  of 24: keyCtrlX
+  of 25: keyCtrlY
+  of 26: keyCtrlZ
   else: keyNone
+
+proc modifiedKey(seq: string): tuple[code, mods: int] =
+  if seq.startsWith("27;") and seq.endsWith("~"):
+    let parts = seq[3 ..< seq.len - 1].split(';')
+    if parts.len != 2: return
+    try:
+      result = (parseInt(parts[1]), parseInt(parts[0]))
+    except ValueError:
+      discard
+  elif seq.endsWith("u") and ';' in seq:
+    let parts = seq[0 ..< seq.len - 1].split(';')
+    if parts.len != 2: return
+    try:
+      result = (parseInt(parts[0]), parseInt(parts[1]))
+    except ValueError:
+      discard
 
 proc isModifiedPaste*(seq: string): bool =
   ## Ctrl/Cmd+V as xterm modifyOtherKeys (`27;5;118~`) or CSI-u (`118;5u`).
-  var code, mods = 0
-  if seq.startsWith("27;") and seq.endsWith("~"):
-    let parts = seq[3 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      mods = parseInt(parts[0])
-      code = parseInt(parts[1])
-    except ValueError:
-      return false
-  elif seq.endsWith("u") and ';' in seq:
-    let parts = seq[0 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      code = parseInt(parts[0])
-      mods = parseInt(parts[1])
-    except ValueError:
-      return false
-  else:
-    return false
-  if code notin {86, 118}:  # v / V
-    return false
+  let (code, mods) = modifiedKey(seq)
+  if code notin {86, 118}: return false
   let bits = mods - 1
   bits > 0 and (bits and (4 or 8)) != 0  # ctrl and/or cmd/meta
 
 proc isModifiedCopy(seq: string): bool =
   ## Ctrl/Cmd+Shift+C as xterm modifyOtherKeys or CSI-u.
-  var code, mods = 0
-  if seq.startsWith("27;") and seq.endsWith("~"):
-    let parts = seq[3 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      mods = parseInt(parts[0])
-      code = parseInt(parts[1])
-    except ValueError:
-      return false
-  elif seq.endsWith("u") and ';' in seq:
-    let parts = seq[0 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      code = parseInt(parts[0])
-      mods = parseInt(parts[1])
-    except ValueError:
-      return false
-  else:
-    return false
+  let (code, mods) = modifiedKey(seq)
   if code notin {67, 99}: return false
   let bits = mods - 1
   let commandCopy = (bits and 8) != 0 and (bits and 4) == 0
@@ -174,25 +176,7 @@ proc isModifiedCopy(seq: string): bool =
 
 proc modifiedCtrlO(seq: string): bool =
   ## Ctrl-O under kitty keyboard / modifyOtherKeys.
-  var code, mods = 0
-  if seq.startsWith("27;") and seq.endsWith("~"):
-    let parts = seq[3 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      mods = parseInt(parts[0])
-      code = parseInt(parts[1])
-    except ValueError:
-      return false
-  elif seq.endsWith("u") and ';' in seq:
-    let parts = seq[0 ..< seq.len - 1].split(';')
-    if parts.len != 2: return false
-    try:
-      code = parseInt(parts[0])
-      mods = parseInt(parts[1])
-    except ValueError:
-      return false
-  else:
-    return false
+  let (code, mods) = modifiedKey(seq)
   code == ord('o') and ((mods - 1) and 4) != 0
 
 proc readBracketedPaste(readNext: ByteReader): InputEvent =
@@ -250,6 +234,10 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
     of 'D': result.key = keyLeft
     of 'H': result.key = keyHome
     of 'F': result.key = keyEnd
+    of 'P': result.key = keyF1
+    of 'Q': result.key = keyF2
+    of 'R': result.key = keyF3
+    of 'S': result.key = keyF4
     else: discard
     return
   if ch2 != ord('['):
@@ -306,10 +294,23 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
     elif seq == "200~":
       return readBracketedPaste(readNext)
     elif seq == "3~": result.key = keyDelete
+    elif seq == "2~": result.key = keyInsert
     elif seq == "1~" or seq == "7~": result.key = keyHome
     elif seq == "4~" or seq == "8~": result.key = keyEnd
     elif seq == "5~": result.key = keyPageUp
     elif seq == "6~": result.key = keyPageDown
+    elif seq in ["11~", "1P"]: result.key = keyF1
+    elif seq in ["12~", "1Q"]: result.key = keyF2
+    elif seq in ["13~", "1R"]: result.key = keyF3
+    elif seq in ["14~", "1S"]: result.key = keyF4
+    elif seq == "15~": result.key = keyF5
+    elif seq == "17~": result.key = keyF6
+    elif seq == "18~": result.key = keyF7
+    elif seq == "19~": result.key = keyF8
+    elif seq == "20~": result.key = keyF9
+    elif seq == "21~": result.key = keyF10
+    elif seq == "23~": result.key = keyF11
+    elif seq == "24~": result.key = keyF12
     elif seq in ["1;3D", "1;5D"]: result.key = keyAltB
     elif seq in ["1;3C", "1;5C"]: result.key = keyAltF
 
@@ -400,6 +401,7 @@ proc toUiEvent*(input: InputEvent, width = 0, height = 0): UiEvent =
         of mouseRelease: umRelease
         of mouseDrag: umDrag
         of mouseNone: umScroll,
-      scrollDelta: input.scrollDelta)
+      scrollDelta: input.scrollDelta, button: input.button,
+      shift: input.shift, alt: input.alt, ctrl: input.ctrl)
   if input.key != keyNone:
     return UiEvent(kind: uiKey, key: input.key, text: input.text)

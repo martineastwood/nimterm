@@ -105,6 +105,7 @@ var
   gOldTermios: Termios
   gRawTermios: Termios
   gCapabilities: TerminalCapabilities
+  gFullscreen: bool
 
 proc useAltScreen(): bool =
   let t = getEnv("TERM")
@@ -123,7 +124,9 @@ proc leaveAltScreen() =
   else:
     clearScreen()
 
-proc termInit*(capabilities = defaultCapabilities()) =
+proc termShutdown*()
+
+proc termInit*(capabilities = defaultCapabilities(), fullscreen = true) =
   if gTermActive:
     raise newException(TermError, "terminal already initialised")
   if tcGetAttr(STDIN_FILENO, gOldTermios.addr) != 0:
@@ -138,26 +141,37 @@ proc termInit*(capabilities = defaultCapabilities()) =
   gRawTermios.c_cc[VTIME] = 0.char
   if tcSetAttr(STDIN_FILENO, TCSANOW, gRawTermios.addr) != 0:
     raise newException(TermError, "tcsetattr failed")
-  gLastW = termWidth()
-  gLastH = termHeight()
-  enterAltScreen()
-  ## Do not inherit a scroll region or origin mode from the previous app.
-  termWrite("\e[?6l\e[r")
-  clearScreen()
-  hideCursor()
   gCapabilities = capabilities
-  termWrite(enableProtocols(capabilities))
+  gFullscreen = fullscreen
   gTermActive = true
-  stdout.flushFile()
+  try:
+    gLastW = termWidth()
+    gLastH = termHeight()
+    if fullscreen:
+      enterAltScreen()
+    else:
+      termWrite("\n".repeat(gLastH) & "\e[H")
+    ## Do not inherit a scroll region or origin mode from the previous app.
+    termWrite("\e[?6l\e[r")
+    if fullscreen: clearScreen()
+    hideCursor()
+    termWrite(enableProtocols(capabilities))
+    stdout.flushFile()
+  except CatchableError:
+    termShutdown()
+    raise
 
 proc termShutdown*() =
   if not gTermActive: return
-  termWrite(disableProtocols(gCapabilities))
-  showCursor()
-  leaveAltScreen()
-  discard tcSetAttr(STDIN_FILENO, TCSANOW, gOldTermios.addr)
-  gTermActive = false
-  stdout.flushFile()
+  try:
+    termWrite(disableProtocols(gCapabilities))
+    showCursor()
+    if gFullscreen: leaveAltScreen()
+    else: termWrite("\e[999B\r\n")
+    stdout.flushFile()
+  finally:
+    discard tcSetAttr(STDIN_FILENO, TCSANOW, gOldTermios.addr)
+    gTermActive = false
 
 proc inputPending*(timeoutMs: int): bool =
   var fds: TFdSet

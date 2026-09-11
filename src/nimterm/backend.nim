@@ -31,5 +31,7 @@ method readEvent*(backend: TerminalBackend, timeoutMs: int): UiEvent {.base.} =
   discard timeoutMs
   UiEvent(kind: uiNone)
 
+method wake*(backend: TerminalBackend) {.base.} = discard
+
 method present*(backend: TerminalBackend, frame: Canvas) {.base.} =
   discard frame

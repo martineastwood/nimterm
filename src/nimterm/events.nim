@@ -24,6 +24,12 @@ type
     umDrag
     umScroll
 
+  UiMouseButton* = enum
+    umbNone
+    umbLeft
+    umbMiddle
+    umbRight
+
   AgentUiEventKind* = enum
     ueRunStarted
     ueStepStarted
@@ -73,6 +79,10 @@ type
     x*: int
     y*: int
     mouse*: UiMouseKind
+    button*: UiMouseButton
+    shift*: bool
+    alt*: bool
+    ctrl*: bool
     scrollDelta*: int
     focused*: bool
     sourceId*: string

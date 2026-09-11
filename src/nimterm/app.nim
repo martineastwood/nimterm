@@ -5,6 +5,7 @@ import ./canvas
 import ./events
 import ./geometry
 import ./keys
+import ./queue
 import ./widget
 import std/[monotimes, times]
 
@@ -19,47 +20,32 @@ type
 
 method poll*(source: EventSource): seq[UiEvent] {.base.} = @[]
 method close*(source: EventSource) {.base.} = discard
+method needsPolling*(source: EventSource): bool {.base.} = true
 
-type
-  EventQueue* = object
-    events: seq[UiEvent]
-
-  App* = object
-    backend*: TerminalBackend
-    root*: Widget
-    queue*: EventQueue
-    size*: Size
-    frame*: Canvas
-    running*: bool
-    dirty*: bool
-    focus*: Widget
-    mouseCapture*: Widget
-    onEvent*: proc (app: var App, event: UiEvent): EventResponse {.closure.}
-    onAction*: proc (app: var App, action: UiAction) {.closure.}
-    pollIntervalMs*: int
-    minFrameIntervalMs*: int
-    sources*: seq[EventSource]
-    timers: seq[Timer]
-    lastPresent: MonoTime
-
-proc post*(queue: var EventQueue, event: UiEvent) =
-  queue.events.add event
-
-proc tryPop*(queue: var EventQueue, event: var UiEvent): bool =
-  if queue.events.len == 0:
-    return false
-  event = queue.events[0]
-  queue.events.delete(0)
-  true
-
-proc pending*(queue: EventQueue): int = queue.events.len
+type App* = object
+  backend*: TerminalBackend
+  root*: Widget
+  queue*: EventQueue
+  size*: Size
+  frame*: Canvas
+  running*: bool
+  dirty*: bool
+  focus*: Widget
+  mouseCapture*: Widget
+  onEvent*: proc (app: var App, event: UiEvent): EventResponse {.closure.}
+  onAction*: proc (app: var App, action: UiAction) {.closure.}
+  pollIntervalMs*: int
+  minFrameIntervalMs*: int
+  sources*: seq[EventSource]
+  timers: seq[Timer]
+  lastPresent: MonoTime
 
 proc newApp*(backend: TerminalBackend, root: Widget = nil): App =
   result.backend = backend
+  result.queue = newEventQueue()
   result.root = root
   result.size = if backend.isNil: size(80, 24) else: backend.size()
   result.frame = newCanvas(result.size)
-  result.running = false
   result.dirty = true
   result.pollIntervalMs = 16
 
@@ -104,11 +90,17 @@ proc waitTimeout(app: App, requested: int): int =
     let remaining = max(0'i64, (timer.due - now).inMilliseconds).int
     if result < 0 or remaining < result: result = remaining
 
+proc idleTimeout(app: App): int =
+  for source in app.sources:
+    if source.needsPolling: return app.pollIntervalMs
+  -1
+
 proc invalidate*(app: var App) =
   app.dirty = true
 
 proc post*(app: var App, event: UiEvent) =
   app.queue.post(event)
+  if not app.backend.isNil: app.backend.wake()
 
 proc focus*(app: var App, widget: Widget) =
   app.focus = if not widget.isNil and widget.focusable and
@@ -183,8 +175,8 @@ proc dispatch*(app: var App, event: UiEvent) =
       app.mouseCapture = nil
     var path: seq[Widget]
     if event.kind == uiMouse:
-      let target = if not app.mouseCapture.isNil: app.mouseCapture else: nil
-      if not target.isNil: discard scope.pathTo(target, path)
+      if not app.mouseCapture.isNil:
+        discard scope.pathTo(app.mouseCapture, path)
       else: discard scope.hitPath(event.x, event.y, path)
       let routed = path.route(event)
       app.applyResponse(routed)
@@ -199,8 +191,7 @@ proc dispatch*(app: var App, event: UiEvent) =
   app.invalidate()
 
 proc render*(app: var App) =
-  if app.backend.isNil:
-    return
+  if app.backend.isNil: return
   let nextSize = app.backend.size()
   if nextSize != app.size:
     app.size = nextSize
@@ -248,14 +239,14 @@ proc pump*(app: var App, timeoutMs = 0): bool = app.step(timeoutMs)
 proc run*(app: var App) =
   if app.backend.isNil:
     raise newException(ValueError, "nimterm App requires a terminal backend")
-  app.backend.init()
   defer:
     for source in app.sources:
       try: source.close()
       except CatchableError: discard
     app.backend.shutdown()
+  app.backend.init()
   app.running = true
   app.render()
   while app.running:
-    discard app.step(app.pollIntervalMs)
+    discard app.step(app.idleTimeout)
     app.flush()

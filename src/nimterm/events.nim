@@ -37,6 +37,7 @@ type
     ueThinkingDelta
     ueToolCalled
     ueApprovalRequired
+    ueToolOutputDelta
     ueToolResult
     ueStepFinished
     ueRunFinished

@@ -110,6 +110,11 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
         runId: event.runId, pending: true, approvalRequired: true, step: event.step,
         approvalChoices: event.approvalChoices,
         cancelChoiceId: event.cancelChoiceId, revision: 1)
+  of ueToolOutputDelta:
+    let index = transcript.itemIndex(event.runId, event.toolId)
+    if index >= 0:
+      transcript.items[index].text.add event.toolOutput
+      inc transcript.items[index].revision
   of ueToolResult:
     let index = transcript.itemIndex(event.runId, event.toolId)
     if index >= 0:

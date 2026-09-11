@@ -55,6 +55,8 @@ type
     keyCopy         ## copy the selected transcript text
     keyAltB
     keyAltF
+    keyAltUp
+    keyAltEnter
     keyTab
     keyShiftTab
     keyShiftEnter  ## newline in the composer (Shift+Enter)

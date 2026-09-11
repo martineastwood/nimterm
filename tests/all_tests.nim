@@ -54,6 +54,9 @@ suite "terminal input decoding":
     check decodeBytes("\e[118;5u").key == keyCtrlV
     check decodeBytes("\e[99;6u").key == keyCopy
     check decodeBytes("\e[111;5u").key == keyCtrlO
+    check decodeBytes("\e\r").key == keyAltEnter
+    check decodeBytes("\e[13;3u").key == keyAltEnter
+    check decodeBytes("\e[1;3A").key == keyAltUp
     check decodeBytes("\e[13;2u").key == keyShiftEnter
 
   test "decodes function, insert, and control keys":

@@ -214,9 +214,9 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
   if ch2 < 0:
     result.key = keyEscape
     return
-  # Option/Alt+Enter (common on macOS): ESC then CR/LF → newline in composer.
+  # Option/Alt+Enter (common on macOS): ESC then CR/LF → follow-up.
   if ch2 == ord('\r') or ch2 == ord('\n'):
-    result.key = keyShiftEnter
+    result.key = keyAltEnter
     return
   if ch2 == ord('b') or ch2 == ord('B'):
     result.key = keyAltB
@@ -278,7 +278,9 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
       if c in {'~', 'A'..'Z', 'a'..'z'}:
         break
     # Shift+Enter / modified Enter variants (xterm, kitty, modifyOtherKeys).
-    if seq in ["13;2~", "13;2u", "27;2;13~", "13;2;13~"]:
+    if seq in ["13;3u", "27;3;13~", "13;3;13~"]:
+      result.key = keyAltEnter
+    elif seq in ["13;2~", "13;2u", "27;2;13~", "13;2;13~"]:
       result.key = keyShiftEnter
     elif seq.startsWith("27;") and seq.endsWith(";13~"):
       # ESC [ 27 ; <mods> ; 13 ~  — any modifier+Enter → newline (not bare Enter)
@@ -311,6 +313,7 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
     elif seq == "21~": result.key = keyF10
     elif seq == "23~": result.key = keyF11
     elif seq == "24~": result.key = keyF12
+    elif seq in ["1;3A"]: result.key = keyAltUp
     elif seq in ["1;3D", "1;5D"]: result.key = keyAltB
     elif seq in ["1;3C", "1;5C"]: result.key = keyAltF
 
@@ -321,7 +324,7 @@ proc decodeInput*(b: int, readNext: ByteReader): InputEvent =
   if b == 0x1b:
     return readEscapeSequence(readNext)
   # Enter is CR and/or LF depending on the terminal — both submit.
-  # Newlines come only from Shift/Option+Enter or bracketed paste.
+  # Newlines come only from Shift+Enter or bracketed paste.
   if b == ord('\r') or b == ord('\n'):
     result.key = keyEnter
     return

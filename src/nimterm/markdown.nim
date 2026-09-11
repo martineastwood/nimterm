@@ -80,14 +80,13 @@ proc renderInline(text: string, useColor: bool): string =
     if result[i] == '`':
       let close = result.find('`', i + 1)
       if close > 0:
-        acc.add t.paint(t.warning, result[i + 1 ..< close])
+        acc.add t.paint(t.code, result[i + 1 ..< close])
         i = close + 1
         continue
     if i + 2 < result.len and result[i] == '*' and result[i + 1] == '*' and result[i + 2] == '*':
       let close = result.find("***", i + 3)
       if close > 0:
-        # Bold + italic on the heading color.
-        acc.add t.italicHeading & result[i + 3 ..< close] & t.reset
+        acc.add "\e[1;3m" & result[i + 3 ..< close] & t.reset
         i = close + 3
         continue
     if i + 1 < result.len and result[i] == '~' and result[i + 1] == '~':
@@ -99,7 +98,7 @@ proc renderInline(text: string, useColor: bool): string =
     if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
       let close = result.find("**", i + 2)
       if close > 0:
-        acc.add t.paint(t.heading, result[i + 2 ..< close])
+        acc.add "\e[1m" & result[i + 2 ..< close] & t.reset
         i = close + 2
         continue
     if i + 1 < result.len and result[i] == '*' and result[i + 1] != '*':
@@ -220,7 +219,7 @@ proc renderMarkdown*(text: string, useColor: bool): string =
         continue
       if line.startsWith("# "):
         let body = renderInline(line[2 .. ^1].strip, color)
-        rendered.add (if color: "\e[1m" & t.model & body & t.reset else: body)
+        rendered.add (if color: t.paint(t.heading, body) else: body)
       elif line.startsWith("## "):
         let body = renderInline(line[3 .. ^1].strip, color)
         rendered.add (if color: t.paint(t.heading, body) else: body)
@@ -232,13 +231,12 @@ proc renderMarkdown*(text: string, useColor: bool): string =
         rendered.add (if color: t.paint(t.dim, "│ " & body) else: "│ " & body)
       elif line.len >= 2 and line[0] in {'-', '*'} and line[1] == ' ':
         let body = renderInline(line[2 .. ^1], color)
-        rendered.add (if color: t.paint(t.accent, "• ") & body else: "• " & body)
+        rendered.add "• " & body
       elif line.len >= 3 and line[0].isDigit and line[1] == '.' and line[2] == ' ':
         let dot = line.find(". ")
         let num = line[0 ..< dot]
         let body = renderInline(line[dot + 2 .. ^1], color)
-        rendered.add (if color: t.paint(t.accent, num & ".") & " " & body
-                      else: num & ". " & body)
+        rendered.add num & ". " & body
       else:
         rendered.add renderInline(line, color)
     of rsCodeBlock:

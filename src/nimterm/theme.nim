@@ -1,6 +1,6 @@
 ## Small TUI palette: named tokens → SGR strings, compiled once per apply.
 ##
-## Built-in dark at 256-color depth matches the historical hardcoded escapes.
+## Built-in themes compile once per terminal color depth.
 ## Custom themes are JSON under the configured global and workspace roots.
 ## No hot reload, no OSC queries, no per-frame color math.
 
@@ -18,12 +18,12 @@ type
   ## The dim token may also be the literal "dim" (SGR attribute 2).
   ThemeSpec* = object
     name*: string
-    accent*, success*, error*, warning*, muted*, dim*, text*: string
+    accent*, success*, error*, warning*, code*, muted*, dim*, text*: string
     heading*, model*, panelBg*, selectedBg*, selectedFg*: string
 
   Theme* = object
     name*: string
-    accent*, success*, error*, warning*, muted*, dim*, text*: string
+    accent*, success*, error*, warning*, code*, muted*, dim*, text*: string
     heading*, model*, panelBg*, selectedBg*, selectedFg*: string
     boldAccent*, boldError*: string
     reset*: string
@@ -34,21 +34,22 @@ type
 
 const
   TokenNames = [
-    "accent", "success", "error", "warning", "muted", "dim", "text",
+    "accent", "success", "error", "warning", "code", "muted", "dim", "text",
     "heading", "model", "panelBg", "selectedBg", "selectedFg"
   ]
 
-  ## Exact historical dark palette at 256 depth (do not restyle casually).
+  ## Default dark palette at 256 depth.
   Dark256* = Theme(
     name: "dark",
     accent: "\e[36m",
     success: "\e[32m",
     error: "\e[31m",
     warning: "\e[33m",
+    code: "\e[38;5;179m",
     muted: "\e[90m",
     dim: "\e[2m",
     text: "\e[37m",
-    heading: "\e[1;93m",
+    heading: "\e[1;34m",
     model: "\e[35m",
     panelBg: "\e[48;5;236m",
     selectedBg: "\e[48;5;81m",
@@ -64,10 +65,11 @@ const
     success: "#00af00",
     error: "#af0000",
     warning: "#afaf00",
+    code: "#d7af5f",
     muted: "242",
     dim: "dim",
     text: "#c6c6c6",
-    heading: "#ffff5f",
+    heading: "#5f87ff",
     model: "#af00af",
     panelBg: "#303030",
     selectedBg: "#5fd7ff",
@@ -80,6 +82,7 @@ const
     success: "#008700",
     error: "#af0000",
     warning: "#af5f00",
+    code: "#875f00",
     muted: "245",
     dim: "dim",
     text: "#262626",
@@ -161,7 +164,7 @@ proc themedStyle*(t: Theme, foreground = "", background = "",
   result.attributes = result.attributes + attributes
 
 proc italicHeading*(t: Theme): string =
-  ## Prefer a single SGR (`\e[1;93m` → `\e[1;3;93m`); else prefix italic.
+  ## Prefer a single SGR for an italic heading; else prefix italic.
   let h = t.heading
   if h.len >= 5 and h.startsWith("\e[1;") and h[^1] == 'm':
     return "\e[1;3;" & h[4 ..< h.high] & "m"
@@ -297,7 +300,7 @@ proc compileBold(fg: string): string =
   if fg.len >= 3 and fg[0] == '\e' and fg[1] == '[' and fg[^1] == 'm' and
      "38;2;" notin fg and "48;2;" notin fg and "38;5;" notin fg and
      "48;5;" notin fg:
-    # \e[36m → \e[1;36m ; \e[1;93m stays as-is if already bold
+    # \e[36m → \e[1;36m ; bold colors stay as-is
     let body = fg[2 ..< fg.high]
     if body.startsWith("1;"): return fg
     return "\e[1;" & body & "m"
@@ -311,6 +314,7 @@ proc compileTheme*(spec: ThemeSpec, depth: ColorDepth): Theme =
   result.success = compileColor(spec.success, depth, false)
   result.error = compileColor(spec.error, depth, false)
   result.warning = compileColor(spec.warning, depth, false)
+  result.code = compileColor(spec.code, depth, false)
   result.muted = compileColor(spec.muted, depth, false)
   result.dim = compileColor(spec.dim, depth, false)
   result.text = compileColor(spec.text, depth, false)
@@ -332,6 +336,7 @@ proc tokenSet(spec: var ThemeSpec, key, value: string) =
   of "success": spec.success = value
   of "error": spec.error = value
   of "warning": spec.warning = value
+  of "code": spec.code = value
   of "muted": spec.muted = value
   of "dim": spec.dim = value
   of "text": spec.text = value
@@ -437,7 +442,6 @@ proc compileNamedTheme*(name: string, depth: ColorDepth,
   let resolved = resolveThemeName(name)
   if depth == cdNone:
     return (true, Theme(name: resolved), "")
-  # Historical dark/256 bit-identical to pre-theme escapes.
   if resolved == "dark" and depth == cd256:
     return (true, Dark256, "")
   let built = builtinSpec(resolved)

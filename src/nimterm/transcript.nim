@@ -86,6 +86,11 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
       transcript.items[index].pending = true
       inc transcript.items[index].revision
   of ueToolCalled:
+    let assistant = transcript.itemIndex(event.runId,
+      event.runId & ":" & $event.step & ":assistant")
+    if assistant >= 0:
+      transcript.items[assistant].pending = false
+      inc transcript.items[assistant].revision
     transcript.items.add TranscriptItem(kind: tikTool, id: event.toolId,
       runId: event.runId,
       title: event.toolName, toolInput: event.toolInput, pending: true,

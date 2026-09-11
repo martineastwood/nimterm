@@ -143,7 +143,7 @@ suite "themes":
       "name": "custom",
       "colors": {
         "accent": "#00ffff", "success": "#00ff00", "error": "#ff0000",
-        "warning": "#ffff00", "muted": 242, "dim": "dim", "text": "#fff",
+        "warning": "#ffff00", "code": "#afaf00", "muted": 242, "dim": "dim", "text": "#fff",
         "heading": "#fff", "model": "#f0f", "panelBg": "#000000",
         "selectedBg": "#ffffff", "selectedFg": "#000000"
       }
@@ -656,7 +656,7 @@ suite "transcript":
     check "hello" in transcriptCanvas.plainText
     check "answer" in transcriptCanvas.plainText
     check "│ You" in transcriptCanvas.plainText
-    check "│ Assistant" in transcriptCanvas.plainText
+    check "│ answer" notin transcriptCanvas.plainText
 
     let card = newCard("status", "ready")
     card.render(canvas, rect(0, 4, 15, 3))
@@ -668,6 +668,57 @@ suite "transcript":
       lines: @[DiffLine(kind: dlAdded, text: "new")]))
     diff.render(canvas, rect(0, 8, 20, 3))
     check "+ new" in canvas.plainText
+
+  test "recedes thinking and makes tool status scannable":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueThinkingDelta, runId: "run", step: 0,
+      text: "private\nreason")
+    view.apply AgentUiEvent(kind: ueStepFinished, runId: "run", step: 0)
+    view.apply AgentUiEvent(kind: ueToolCalled, runId: "run", step: 0,
+      toolId: "call", toolName: "grep")
+    view.apply AgentUiEvent(kind: ueToolResult, runId: "run", step: 0,
+      toolId: "call", toolOutput: "src/main.nim:7:match")
+    var canvas = newCanvas(size(40, 10))
+    view.render(canvas, rect(0, 0, 40, 10))
+    check "Thinking · 2 lines (Ctrl-O)" in canvas.plainText
+    check "private" notin canvas.plainText
+    check "│ ✓ grep" in canvas.plainText
+    check "src/main.nim:7:match" in canvas.plainText
+    check view.handle(UiEvent(kind: uiKey, key: keyCtrlO)) == eventHandled
+    canvas.clear()
+    view.render(canvas, rect(0, 0, 40, 10))
+    check "private" in canvas.plainText
+
+  test "renders assistant markdown before a tool question":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "**before the question**")
+    check view.transcript.items[0].pending
+    view.apply AgentUiEvent(kind: ueToolCalled, runId: "run", step: 0,
+      toolId: "ask", toolName: "ask_user")
+    check not view.transcript.items[0].pending
+    var canvas = newCanvas(size(40, 5))
+    view.render(canvas, rect(0, 0, 40, 5))
+    check attrBold in canvas.getCell(0, 0).style.attributes
+
+  test "renders completed markdown while assistant text streams":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "**already complete** and **still open")
+    var canvas = newCanvas(size(40, 2))
+    view.render(canvas, rect(0, 0, 40, 2))
+    check attrBold in canvas.getCell(0, 0).style.attributes
+    check canvas.getCell(21, 0).glyph.int == ord('*')
+
+  test "preserves assistant markdown box drawing":
+    let view = newTranscriptWidget()
+    view.apply AgentUiEvent(kind: ueTextDelta, runId: "run", step: 0,
+      text: "| A |\n|---|\n| B |")
+    view.apply AgentUiEvent(kind: ueStepFinished, runId: "run", step: 0)
+    var canvas = newCanvas(size(30, 8))
+    view.render(canvas, rect(0, 0, 30, 8))
+    check "┌" in canvas.plainText
+    check "│ A" in canvas.plainText
 
   test "wraps long transcript lines":
     var transcript = newTranscript()
@@ -682,8 +733,8 @@ suite "transcript":
     var transcript = newTranscript()
     transcript.appendUser("hello")
     let view = newTranscriptWidget(transcript)
-    view.selectionStart = 0
-    view.selectionEnd = 2
+    view.selectionStart = 1
+    view.selectionEnd = 1
     view.selectionStartCol = 0
     view.selectionEndCol = 10
     check "hello" in view.selectedText()

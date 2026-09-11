@@ -9,6 +9,7 @@ import ../geometry
 import ../keys
 import ../markdown as markdown_renderer
 import ../style
+import ../theme
 import ../transcript as transcript_model
 import ../widget
 import ./scroll
@@ -44,6 +45,7 @@ type
     text: string
     style: Style
     railStyle: Style
+    hasRail: bool
 
   TranscriptItemCache = object
     revision: int
@@ -51,12 +53,6 @@ type
     lines: seq[TranscriptLine]
     sourceRevision: int
     sourceLines: seq[string]
-    streaming: bool
-    streamKind: transcript_model.TranscriptItemKind
-    streamModel: string
-    streamTextLen: int
-    streamRawLines: seq[string]
-    streamTailRows: int
 
 proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
                           userStyle = defaultStyle(),
@@ -96,44 +92,64 @@ proc setTranscript*(widget: TranscriptWidget,
 
 method focusable*(widget: TranscriptWidget): bool = true
 
+proc formatToolOutputLine(name, line: string): string
+
 proc itemLines(widget: TranscriptWidget,
                item: transcript_model.TranscriptItem): seq[string] =
   case item.kind
   of tikUser:
     result.add "│ You"
-    for line in item.text.splitLines: result.add "│ " & line
+    for line in item.text.splitLines:
+      result.add "│ " & currentTheme.paint(currentTheme.boldAccent, line)
   of tikAssistant:
-    result.add "│ " & (if item.model.len > 0: item.model else: "Assistant")
-    let text = if item.pending: item.text else:
-      markdown_renderer.renderMarkdown(item.text, true)
+    let text = markdown_renderer.renderMarkdown(item.text, true)
     for line in text.splitLines:
-      result.add "│ " & line
+      result.add line
   of tikThinking:
-    result.add "│ Thinking"
-    for line in item.text.splitLines: result.add "│ " & line
+    if item.pending and not item.expanded:
+      result.add "Thinking …"
+      return
+    let lines = item.text.splitLines
+    if item.expanded:
+      result.add "Thinking"
+      for line in lines: result.add line
+    else:
+      result.add "Thinking · " & $lines.len &
+        (if lines.len == 1: " line" else: " lines") & " (Ctrl-O)"
   of tikTool:
-    result.add "│ " & (if item.isError: "✗ " else: "● ") & item.title
+    let glyph = if item.isError: currentTheme.paint(currentTheme.error, "✗")
+                elif item.pending: currentTheme.paint(currentTheme.muted, "…")
+                else: currentTheme.paint(currentTheme.success, "✓")
+    result.add "│ " & glyph & " " & item.title
     let details = if not item.pending and not item.isError and
         not widget.toolDetails.isNil:
       widget.toolDetails(item.title, item.toolInput, item.text)
     else: @[]
     if details.len > 0:
       let shownDetails = if item.expanded: details.len else: min(3, details.len)
-      for i in 0 ..< shownDetails: result.add "│   " & details[i]
+      for i in 0 ..< shownDetails:
+        let detail = if i == 0 and details[i] ==
+            item.toolInput.getOrDefault("path").getStr:
+          currentTheme.paint(currentTheme.muted, details[i])
+        else:
+          details[i]
+        result.add "│   " & detail
       if not item.expanded and details.len > shownDetails:
         result.add "│   … " & $(details.len - shownDetails) &
           " detail lines (Ctrl-O)"
     let lines = item.text.splitLines
     let shown = if item.expanded: lines.len else: min(2, lines.len)
-    for i in 0 ..< shown: result.add "│   " & lines[i]
+    for i in 0 ..< shown:
+      result.add "│   " & formatToolOutputLine(item.title, lines[i])
     if not item.expanded and lines.len > shown:
       result.add "│   … " & $(lines.len - shown) & " more (Ctrl-O)"
-    if item.pending: result.add "│   working"
+    if item.pending:
+      result.add "│   " & currentTheme.paint(currentTheme.muted, "working")
     if item.approvalRequired:
       for choice in item.approvalChoices:
         result.add "│   [" & choice.key & "] " & choice.label
   of tikError:
-    for line in item.text.splitLines: result.add "│ " & line
+    for line in item.text.splitLines: result.add line
   of tikStatus:
     for line in item.text.splitLines: result.add "· " & line
 
@@ -155,12 +171,37 @@ proc itemRailStyle(widget: TranscriptWidget, kind: TranscriptItemKind): Style =
   of tikError: widget.errorRailStyle
   of tikStatus: widget.thinkingRailStyle
 
-proc wrapTranscriptLine(text: string, width: int): seq[string] =
+proc digitsOnly(text: string): bool =
+  text.len > 0 and text.allCharsInSet({'0' .. '9'})
+
+proc formatToolOutputLine(name, line: string): string =
+  let t = currentTheme
+  if name == "grep":
+    let first = line.find(':')
+    if first > 0:
+      let second = line.find(':', first + 1)
+      if second > first + 1 and digitsOnly(line[first + 1 ..< second]):
+        let body = if second + 1 < line.len: line[second + 1 .. ^1] else: ""
+        return t.paint(t.muted, line[0 .. second]) & body
+  elif name == "read" and (line.startsWith("path: ") or
+      line.startsWith("version: ") or line.startsWith("lines: ")):
+    return t.paint(t.muted, line)
+  elif name == "read":
+    let separator = line.find(" | ")
+    if separator > 0 and digitsOnly(line[0 ..< separator].strip):
+      let body = if separator + 3 < line.len: line[separator + 3 .. ^1] else: ""
+      return t.paint(t.muted, line[0 .. separator + 2]) & body
+  elif name == "glob":
+    return t.paint(t.muted, line)
+  line
+
+proc wrapTranscriptLine(text: string, width: int,
+                        preservePrefix = false): seq[string] =
   if width <= 0: return @[text]
   var prefix = ""
-  if text.startsWith("│"):
+  if preservePrefix and text.startsWith("│"):
     prefix = "│"
-  elif text.startsWith("·"):
+  elif preservePrefix and text.startsWith("·"):
     prefix = "·"
   var prefixLen = prefix.len
   while prefixLen < text.len and text[prefixLen] == ' ':
@@ -170,98 +211,22 @@ proc wrapTranscriptLine(text: string, width: int): seq[string] =
   for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix))):
     result.add prefix & chunk
 
+proc hiddenThinkingDelta(widget: TranscriptWidget, event: AgentUiEvent): bool =
+  if event.kind != ueThinkingDelta or event.text.len == 0: return false
+  let id = event.runId & ":" & $event.step & ":thinking"
+  for item in widget.transcript.items:
+    if item.id == id:
+      return item.pending and not item.expanded
+
 proc apply*(widget: TranscriptWidget, event: AgentUiEvent) =
+  let hidden = widget.hiddenThinkingDelta(event)
   widget.transcript.apply(event)
-  widget.invalidateLayout()
+  if not hidden: widget.invalidateLayout()
 
 proc awaitingApproval*(widget: TranscriptWidget): bool =
   for item in widget.transcript.items:
     if item.approvalRequired:
       return true
-
-proc appendStreamingText(widget: TranscriptWidget,
-                         item: transcript_model.TranscriptItem,
-                         cache: var TranscriptItemCache) =
-  if cache.streamTextLen > item.text.len: return
-  let oldRawCount = cache.streamRawLines.len
-  if oldRawCount > 0:
-    if cache.lines.len > 0: cache.lines.setLen(cache.lines.len - 1)
-    if cache.streamTailRows > 0:
-      cache.lines.setLen(cache.lines.len - cache.streamTailRows)
-  else:
-    cache.streamRawLines.add ""
-  if cache.streamTextLen < item.text.len:
-    let delta = item.text[cache.streamTextLen .. ^1]
-    var start = 0
-    for i, ch in delta:
-      if ch != '\n': continue
-      cache.streamRawLines[^1].add delta[start ..< i]
-      if cache.streamRawLines[^1].endsWith("\r"):
-        cache.streamRawLines[^1].setLen(cache.streamRawLines[^1].len - 1)
-      cache.streamRawLines.add ""
-      start = i + 1
-    if start < delta.len:
-      cache.streamRawLines[^1].add delta[start .. ^1]
-    cache.streamTextLen = item.text.len
-  let first = max(0, oldRawCount - 1)
-  for i in first ..< cache.streamRawLines.len:
-    for wrapped in wrapTranscriptLine("│ " & cache.streamRawLines[i],
-                                      widget.area.w):
-      cache.lines.add TranscriptLine(text: wrapped,
-        style: widget.itemStyle(item.kind),
-        railStyle: widget.itemRailStyle(item.kind))
-  cache.streamTailRows = 0
-  if cache.streamRawLines.len > 0:
-    cache.streamTailRows = wrapTranscriptLine(
-      "│ " & cache.streamRawLines[^1], widget.area.w).len
-  cache.lines.add TranscriptLine(text: "│",
-    style: widget.itemStyle(item.kind), railStyle: widget.itemRailStyle(item.kind))
-
-proc buildStreamingCache(widget: TranscriptWidget,
-                         item: transcript_model.TranscriptItem,
-                         cache: var TranscriptItemCache) =
-  cache.lines.setLen(0)
-  cache.lines.add TranscriptLine(text: "│",
-    style: widget.itemStyle(item.kind), railStyle: widget.itemRailStyle(item.kind))
-  let heading = if item.kind == transcript_model.tikAssistant:
-    "│ " & (if item.model.len > 0: item.model else: "Assistant")
-  else:
-    "│ Thinking"
-  for wrapped in wrapTranscriptLine(heading, widget.area.w):
-    cache.lines.add TranscriptLine(text: wrapped,
-      style: widget.itemStyle(item.kind),
-      railStyle: widget.itemRailStyle(item.kind))
-  cache.streaming = true
-  cache.streamKind = item.kind
-  cache.streamModel = item.model
-  cache.streamTextLen = 0
-  cache.streamRawLines.setLen(0)
-  cache.streamTailRows = 0
-  appendStreamingText(widget, item, cache)
-
-proc rebuildStreamingWidth(widget: TranscriptWidget,
-                           item: transcript_model.TranscriptItem,
-                           cache: var TranscriptItemCache) =
-  cache.lines.setLen(0)
-  let style = widget.itemStyle(item.kind)
-  let railStyle = widget.itemRailStyle(item.kind)
-  cache.lines.add TranscriptLine(text: "│", style: style,
-    railStyle: railStyle)
-  let heading = if item.kind == transcript_model.tikAssistant:
-    "│ " & (if item.model.len > 0: item.model else: "Assistant")
-  else:
-    "│ Thinking"
-  for wrapped in wrapTranscriptLine(heading, widget.area.w):
-    cache.lines.add TranscriptLine(text: wrapped, style: style,
-      railStyle: railStyle)
-  for raw in cache.streamRawLines:
-    for wrapped in wrapTranscriptLine("│ " & raw, widget.area.w):
-      cache.lines.add TranscriptLine(text: wrapped, style: style,
-        railStyle: railStyle)
-  cache.streamTailRows = if cache.streamRawLines.len == 0: 0 else:
-    wrapTranscriptLine("│ " & cache.streamRawLines[^1], widget.area.w).len
-  cache.lines.add TranscriptLine(text: "│", style: style,
-    railStyle: railStyle)
 
 proc ensureLayout(widget: TranscriptWidget) =
   if widget.linesValid and widget.cachedWidth == widget.area.w:
@@ -273,32 +238,19 @@ proc ensureLayout(widget: TranscriptWidget) =
   for i, item in widget.transcript.items:
     let cache = addr widget.itemCaches[i]
     if cache[].revision != item.revision or cache[].width != widget.area.w:
-      let canStream = cache[].streaming and cache[].revision >= 0 and
-        item.pending and
-        item.kind in {transcript_model.tikAssistant,
-                      transcript_model.tikThinking} and
-        cache[].streamKind == item.kind and cache[].streamModel == item.model
-      if canStream:
-        if cache[].width == widget.area.w:
-          appendStreamingText(widget, item, cache[])
-        else:
-          rebuildStreamingWidth(widget, item, cache[])
-      else:
-        cache[].lines.setLen(0)
-        let style = widget.itemStyle(item.kind)
-        let railStyle = widget.itemRailStyle(item.kind)
-        cache[].lines.add TranscriptLine(text: "│", style: style,
-          railStyle: railStyle)
-        if cache[].sourceRevision != item.revision or cache[].sourceLines.len == 0:
-          cache[].sourceLines = widget.itemLines(item)
-          cache[].sourceRevision = item.revision
-        for line in cache[].sourceLines:
-          for wrapped in wrapTranscriptLine(line, widget.area.w):
-            cache[].lines.add TranscriptLine(text: wrapped, style: style,
-              railStyle: railStyle)
-        cache[].lines.add TranscriptLine(text: "│", style: style,
-          railStyle: railStyle)
-        cache[].streaming = false
+      cache[].lines.setLen(0)
+      let style = widget.itemStyle(item.kind)
+      let railStyle = widget.itemRailStyle(item.kind)
+      if cache[].sourceRevision != item.revision or cache[].sourceLines.len == 0:
+        cache[].sourceLines = widget.itemLines(item)
+        cache[].sourceRevision = item.revision
+      for line in cache[].sourceLines:
+        let preservePrefix = item.kind in {tikUser, tikTool, tikStatus}
+        let hasRail = item.kind in {tikUser, tikTool} and
+          (line.startsWith("│") or line.startsWith("▌"))
+        for wrapped in wrapTranscriptLine(line, widget.area.w, preservePrefix):
+          cache[].lines.add TranscriptLine(text: wrapped, style: style,
+            railStyle: railStyle, hasRail: hasRail)
       cache[].revision = item.revision
       cache[].width = widget.area.w
     if i > 0: inc total
@@ -372,14 +324,15 @@ proc selectedText*(widget: TranscriptWidget): string =
   let first = max(0, min(widget.selectionStart, widget.selectionEnd))
   let last = min(count - 1, max(widget.selectionStart, widget.selectionEnd))
   for i in first .. last:
-    var line = stripAnsi(widget.lineAt(i).text)
+    let transcriptLine = widget.lineAt(i)
+    var line = stripAnsi(transcriptLine.text)
     var prefixColumns = 0
     let railPrefix = "│ "
     let statusPrefix = "· "
-    if line.startsWith(railPrefix):
+    if transcriptLine.hasRail and line.startsWith(railPrefix):
       line = if line.len > railPrefix.len: line[railPrefix.len .. ^1] else: ""
       prefixColumns = 2
-    elif line == "│":
+    elif transcriptLine.hasRail and line == "│":
       line = ""
       prefixColumns = 1
     elif line.startsWith(statusPrefix):
@@ -446,8 +399,10 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
             not widget.toolDetails.isNil:
           widget.toolDetails(item.title, item.toolInput, item.text)
         else: @[]
-        if item.kind == tikTool and (item.text.splitLines.len > 2 or
-            details.len > 2):
+        let canExpand = (item.kind == tikThinking and item.text.len > 0) or
+          (item.kind == tikTool and (item.text.splitLines.len > 2 or
+            details.len > 2))
+        if canExpand:
           expandable = true
           if not item.expanded: expand = true
       if not expandable: return eventIgnored
@@ -456,8 +411,10 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
             not widget.toolDetails.isNil:
           widget.toolDetails(item.title, item.toolInput, item.text)
         else: @[]
-        if item.kind == tikTool and (item.text.splitLines.len > 2 or
-            details.len > 2):
+        let canExpand = (item.kind == tikThinking and item.text.len > 0) or
+          (item.kind == tikTool and (item.text.splitLines.len > 2 or
+            details.len > 2))
+        if canExpand:
           item.expanded = expand
       widget.invalidateLines()
       widget.viewport.update(widget.lineCount(), widget.area.h)
@@ -503,7 +460,8 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
 method measure*(widget: TranscriptWidget, constraints: Constraints): Size =
   var height = 0
   var width = 0
-  for item in widget.transcript.items:
+  for i, item in widget.transcript.items:
+    if i > 0: inc height
     for line in widget.itemLines(item):
       width = max(width, ansiVisibleWidth(line))
       inc height
@@ -522,7 +480,7 @@ method paint*(widget: TranscriptWidget, canvas: var Canvas) =
     let railStyle = line.railStyle
     for x in widget.area.x ..< widget.area.x + widget.area.w:
       canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
-    if line.text.startsWith("▌") or line.text.startsWith("│"):
+    if line.hasRail:
       let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
       let rail = line.text[0 ..< railLen]
       let body = if line.text.len > railLen: line.text[railLen .. ^1] else: ""

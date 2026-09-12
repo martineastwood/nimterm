@@ -56,6 +56,7 @@ type
     keyAltB
     keyAltF
     keyAltD
+    keyAltJ
     keyAltUp
     keyAltEnter
     keyTab

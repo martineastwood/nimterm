@@ -103,7 +103,7 @@ method handle*(widget: QuestionWidget, event: UiEvent): EventResponse =
     case event.key
     of keyChar, keyBackspace, keyDelete, keyLeft, keyRight, keyHome, keyEnd,
        keyCtrlA, keyCtrlB, keyCtrlE, keyCtrlF, keyCtrlU, keyAltB, keyAltF,
-       keyShiftEnter:
+       keyShiftEnter, keyAltJ:
       discard widget.freeText.handle(event)
       return eventHandled
     of keyEnter:

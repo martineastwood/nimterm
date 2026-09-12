@@ -60,6 +60,15 @@ suite "terminal input decoding":
     check decodeBytes("\e[13;3u").key == keyAltEnter
     check decodeBytes("\e[1;3A").key == keyAltUp
     check decodeBytes("\e[13;2u").key == keyShiftEnter
+    check decodeBytes("\ej").key == keyAltJ
+
+  test "alt-j inserts a newline as a Shift+Enter fallback":
+    let input = newInput()
+    input.setText("one")
+    check input.handle(UiEvent(kind: uiKey, key: keyAltJ)).handled
+    check input.text == "one\n"
+    discard input.handle(UiEvent(kind: uiKey, key: keyChar, text: "two"))
+    check input.text == "one\ntwo"
 
   test "decodes function, insert, and control keys":
     check decodeBytes("\eOP").key == keyF1

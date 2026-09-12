@@ -368,7 +368,7 @@ method handle*(widget: InputWidget, event: UiEvent): EventResponse =
     widget.yank()
   of keyCtrlZ:
     widget.undo()
-  of keyShiftEnter:
+  of keyShiftEnter, keyAltJ:
     widget.insert("\n")
   of keyEnter:
     return widget.actionHandled("submit", widget.text)

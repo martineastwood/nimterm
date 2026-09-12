@@ -472,28 +472,38 @@ method paint*(widget: TranscriptWidget, canvas: var Canvas) =
   widget.viewport.update(count, widget.area.h)
   let start = widget.viewport.offset
   let stop = min(count, start + widget.area.h)
-  if start >= stop: return
-  var y = widget.area.y
-  for i in start ..< stop:
-    let line = widget.lineAt(i)
-    let lineStyle = line.style
-    let railStyle = line.railStyle
-    for x in widget.area.x ..< widget.area.x + widget.area.w:
-      canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
-    if line.hasRail:
-      let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
-      let rail = line.text[0 ..< railLen]
-      let body = if line.text.len > railLen: line.text[railLen .. ^1] else: ""
-      canvas.writeText(widget.area.x, y, rail, railStyle, 1)
-      canvas.writeAnsiText(widget.area.x + 1, y, body, lineStyle,
-        max(0, widget.area.w - 1))
-    else:
-      canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle,
-        widget.area.w)
-    let bounds = widget.selectionColumns(i)
-    if bounds.lo >= 0:
-      for x in max(0, bounds.lo) .. min(widget.area.w - 1, bounds.hi):
-        var cell = canvas.getCell(widget.area.x + x, y)
-        cell.style = widget.selectionStyle
-        canvas.setCell(widget.area.x + x, y, cell)
-    inc y
+  if start < stop:
+    var y = widget.area.y
+    for i in start ..< stop:
+      let line = widget.lineAt(i)
+      let lineStyle = line.style
+      let railStyle = line.railStyle
+      for x in widget.area.x ..< widget.area.x + widget.area.w:
+        canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
+      if line.hasRail:
+        let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
+        let rail = line.text[0 ..< railLen]
+        let body = if line.text.len > railLen: line.text[railLen .. ^1] else: ""
+        canvas.writeText(widget.area.x, y, rail, railStyle, 1)
+        canvas.writeAnsiText(widget.area.x + 1, y, body, lineStyle,
+          max(0, widget.area.w - 1))
+      else:
+        canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle,
+          widget.area.w)
+      let bounds = widget.selectionColumns(i)
+      if bounds.lo >= 0:
+        for x in max(0, bounds.lo) .. min(widget.area.w - 1, bounds.hi):
+          var cell = canvas.getCell(widget.area.x + x, y)
+          cell.style = widget.selectionStyle
+          canvas.setCell(widget.area.x + x, y, cell)
+      inc y
+  if widget.area.w > 0 and widget.area.h > 0 and count > widget.area.h:
+    let trackStyle = currentTheme.themedStyle(currentTheme.muted)
+    let thumbHeight = max(1, widget.area.h * widget.area.h div count)
+    let thumbTop = if widget.viewport.maxOffset == 0: 0
+                   else: (widget.area.h - thumbHeight) * widget.viewport.offset div
+                     widget.viewport.maxOffset
+    let x = widget.area.x + widget.area.w - 1
+    for row in 0 ..< widget.area.h:
+      let glyph = if row >= thumbTop and row < thumbTop + thumbHeight: "┃" else: "┊"
+      canvas.writeText(x, widget.area.y + row, glyph, trackStyle, 1)

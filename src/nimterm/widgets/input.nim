@@ -16,6 +16,7 @@ type
     prefix*: string
     continuationPrefix*: string
     style*: Style
+    prefixStyle*: Style
     cursorStyle*: Style
     cursorBarStyle*: Style
     paddingLeft*: int
@@ -47,9 +48,12 @@ proc defaultCursorStyle(): Style =
 
 proc newInput*(prefix = "> ", continuationPrefix = "  ",
                style = defaultStyle(), cursorStyle = defaultCursorStyle(),
-               cursorBarStyle = defaultCursorStyle()): InputWidget =
+               cursorBarStyle = defaultCursorStyle(),
+               prefixStyle = defaultStyle()): InputWidget =
+  let resolvedPrefixStyle = if prefixStyle == defaultStyle(): style else: prefixStyle
   InputWidget(prefix: prefix, continuationPrefix: continuationPrefix,
-    style: style, cursorStyle: cursorStyle, cursorBarStyle: cursorBarStyle)
+    style: style, prefixStyle: resolvedPrefixStyle,
+    cursorStyle: cursorStyle, cursorBarStyle: cursorBarStyle)
 
 proc invalidateTextLayout(widget: InputWidget) =
   inc widget.textVersion
@@ -342,15 +346,21 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
     let line = lines[lineIndex]
     let prefix = if line.firstSegment and line.sourceLine == 0:
       widget.prefix else: widget.continuationPrefix
+    let prefixStyle = if line.firstSegment and line.sourceLine == 0:
+      widget.prefixStyle else: widget.style
     let row = contentY + rowIndex
     if lineIndex != cursorVisualLine:
-      canvas.writeText(contentX, row, prefix & line.text, widget.style,
-        contentWidth)
+      let prefixWidth = prefix.displayWidth
+      canvas.writeText(contentX, row, prefix, prefixStyle, contentWidth)
+      canvas.writeText(contentX + prefixWidth, row, line.text, widget.style,
+        max(0, contentWidth - prefixWidth))
       continue
     let cursorByte = byteAtColumn(line.text, cursorVisualColumn)
     let cursorX = contentX + prefix.displayWidth + cursorVisualColumn
-    canvas.writeText(contentX, row, prefix & line.text[0 ..< cursorByte],
-      widget.style, contentWidth)
+    canvas.writeText(contentX, row, prefix, prefixStyle, contentWidth)
+    canvas.writeText(contentX + prefix.displayWidth, row,
+      line.text[0 ..< cursorByte], widget.style,
+      max(0, contentWidth - prefix.displayWidth))
     let cursorEnd = if cursorByte < line.text.len: nextPosition(line.text, cursorByte)
                     else: cursorByte
     let cursorText = if cursorByte < line.text.len:

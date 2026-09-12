@@ -172,6 +172,12 @@ suite "themes":
     check compiled.ok
     check compiled.theme.accent == Dark256.accent
 
+  test "keeps muted greys visible at 16-colour depth":
+    let dark = compileTheme(DarkSpec, cd16)
+    let light = compileTheme(LightSpec, cd16)
+    check dark.muted == "\e[90m"
+    check light.muted == "\e[90m"
+
   test "parses a complete custom theme":
     let doc = %*{
       "name": "custom",

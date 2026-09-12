@@ -224,15 +224,26 @@ proc parseHexRgb(s: string): tuple[ok: bool, r, g, b: int] =
 
 proc rgbToAnsi16(r, g, b: int): int =
   ## Nearest of the 16 basic ANSI colors (0-15).
-  let bright = max(r, max(g, b)) >= 180
-  var idx = 0
-  if r >= 128: idx = idx or 1
-  if g >= 128: idx = idx or 2
-  if b >= 128: idx = idx or 4
-  if bright and idx > 0: idx = idx or 8
-  elif r + g + b < 48: idx = 0
-  elif r + g + b > 600: idx = 15
-  idx
+  ##
+  ## A bit-mask conversion maps mid-tone greys to black, which makes the
+  ## default muted colour disappear on dark 16-colour PowerShell consoles.
+  ## Use the conventional console palette so xterm greys select dark grey
+  ## (ANSI 90) instead.
+  const palette: array[16, array[3, int]] = [
+    [0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
+    [0, 0, 128], [128, 0, 128], [0, 128, 128], [192, 192, 192],
+    [128, 128, 128], [255, 0, 0], [0, 255, 0], [255, 255, 0],
+    [0, 0, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255]
+  ]
+  var bestDistance = int.high
+  for i in 0 ..< palette.len:
+    let dr = r - palette[i][0]
+    let dg = g - palette[i][1]
+    let db = b - palette[i][2]
+    let distance = dr * dr + dg * dg + db * db
+    if distance < bestDistance:
+      bestDistance = distance
+      result = i
 
 proc rgbTo256(r, g, b: int): int =
   ## Nearest xterm 256-color index (cube or grayscale).

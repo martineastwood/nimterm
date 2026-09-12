@@ -14,8 +14,12 @@ The library currently provides:
 nimterm does not depend on nimgent. Applications can adapt any agent or event
 source to `AgentUiEvent`; nimlet's adapter is the first example.
 
-The POSIX backend is available now; a Windows backend will follow while
-keeping the widget and event APIs platform-neutral.
+The backend is platform-neutral at the widget and event layer. POSIX uses
+termios and a signal wake pipe; native Windows uses Win32 console modes when
+available and an ANSI byte-stream fallback for Git Bash/MSYS terminals.
+Applications should construct `newPlatformBackend`; it selects the native
+backend at compile time.
 
-Use `newPosixBackend(fullscreen = false)` to render in the normal terminal
-screen and preserve the completed interface in shell scrollback.
+Use `newPlatformBackend(fullscreen = false)` to render in the normal terminal
+screen and preserve the completed interface in shell scrollback. The
+POSIX-specific `newPosixBackend` remains available for callers that need it.

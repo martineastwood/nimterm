@@ -121,6 +121,10 @@ proc newPosixBackend*(capabilities = detectTerminalCapabilities(),
   PosixBackend(capabilities: capabilities, fullscreen: fullscreen,
     wakeRead: -1, wakeWrite: -1)
 
+proc newPlatformBackend*(capabilities = detectTerminalCapabilities(),
+                         fullscreen = true): TerminalBackend =
+  newPosixBackend(capabilities, fullscreen)
+
 method init*(backend: PosixBackend) =
   var fds: array[2, cint]
   if posix.pipe(fds) != 0: raiseOSError(osLastError())

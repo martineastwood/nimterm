@@ -174,7 +174,14 @@ proc italicHeading*(t: Theme): string =
 
 proc detectDepth*(): ColorDepth =
   if getEnv("NO_COLOR").len > 0: return cdNone
-  if not stdout.isatty: return cdNone
+  when defined(windows):
+    ## Native binaries launched by mintty/Git Bash may see a pipe even though
+    ## the pipe is the interactive terminal stream.
+    if not stdout.isatty and getEnv("WT_SESSION").len == 0 and
+        (getEnv("MSYSTEM").len == 0 or
+         getEnv("TERM").toLowerAscii == "dumb"): return cdNone
+  else:
+    if not stdout.isatty: return cdNone
   let ct = getEnv("COLORTERM").toLowerAscii
   if ct == "truecolor" or ct == "24bit": return cdTrue
   let term = getEnv("TERM").toLowerAscii

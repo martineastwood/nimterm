@@ -5,6 +5,8 @@ import nimterm/[ansi, app, backend, canvas, events, geometry, input, markdown, k
 import nimterm/term
 when not defined(windows):
   import nimterm/platform_posix
+else:
+  import nimterm/platform_windows
 
 proc decodeBytes(bytes: string): InputEvent =
   var index = 1
@@ -341,9 +343,13 @@ suite "core canvas and app":
     check app.step()
     check failure == "controller failed"
 
-  test "constructs the POSIX backend without entering raw mode":
-    check not newPosixBackend().isNil
-    check not newPosixBackend(fullscreen = false).isNil
+  test "constructs the platform backend without entering raw mode":
+    when defined(windows):
+      check not newWindowsBackend().isNil
+      check not newWindowsBackend(fullscreen = false).isNil
+    else:
+      check not newPosixBackend().isNil
+      check not newPosixBackend(fullscreen = false).isNil
 
   test "canvas writes text into a stable snapshot":
     var canvas = newCanvas(size(8, 2))

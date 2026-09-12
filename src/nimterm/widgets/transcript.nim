@@ -34,6 +34,7 @@ type
     selectionStartCol*: int
     selectionEndCol*: int
     searchQuery*: string
+    searchNeedle: string
     searchMatches*: seq[int]
     searchIndex*: int
     searchStyle*: Style
@@ -47,6 +48,7 @@ type
 
   TranscriptLine = object
     text: string
+    searchText: string
     style: Style
     railStyle: Style
     hasRail: bool
@@ -255,7 +257,8 @@ proc ensureLayout(widget: TranscriptWidget) =
         let hasRail = item.kind in {tikUser, tikTool} and
           (line.startsWith("│") or line.startsWith("▌"))
         for wrapped in wrapTranscriptLine(line, widget.area.w, preservePrefix):
-          cache[].lines.add TranscriptLine(text: wrapped, style: style,
+          cache[].lines.add TranscriptLine(text: wrapped,
+            searchText: stripAnsi(wrapped).toLowerAscii, style: style,
             railStyle: railStyle, hasRail: hasRail)
       cache[].revision = item.revision
       cache[].width = widget.area.w
@@ -362,15 +365,31 @@ proc revealSearchMatch(widget: TranscriptWidget) =
   widget.viewport.followTail = widget.viewport.offset == widget.viewport.maxOffset
 
 proc setSearch*(widget: TranscriptWidget, query: string): int =
-  widget.searchQuery = query.strip
-  widget.searchMatches.setLen(0)
+  let normalized = query.strip
+  let needle = normalized.toLowerAscii
+  let previousNeedle = widget.searchNeedle
+  if needle == previousNeedle:
+    widget.searchIndex = if widget.searchMatches.len > 0: 0 else: -1
+    if widget.searchIndex >= 0: widget.revealSearchMatch()
+    return widget.searchMatches.len
+  widget.searchQuery = normalized
+  widget.searchNeedle = needle
   widget.searchIndex = -1
-  if widget.searchQuery.len == 0:
+  if needle.len == 0:
+    widget.searchMatches.setLen(0)
     return
-  let needle = widget.searchQuery.toLowerAscii
-  for i in 0 ..< widget.lineCount():
-    if stripAnsi(widget.lineAt(i).text).toLowerAscii.find(needle) >= 0:
-      widget.searchMatches.add i
+  if previousNeedle.len > 0 and needle.len > previousNeedle.len and
+      needle.startsWith(previousNeedle):
+    var narrowed: seq[int]
+    for i in widget.searchMatches:
+      if widget.lineAt(i).searchText.find(needle) >= 0:
+        narrowed.add i
+    widget.searchMatches = narrowed
+  else:
+    widget.searchMatches.setLen(0)
+    for i in 0 ..< widget.lineCount():
+      if widget.lineAt(i).searchText.find(needle) >= 0:
+        widget.searchMatches.add i
   if widget.searchMatches.len > 0:
     widget.searchIndex = 0
     widget.revealSearchMatch()
@@ -391,7 +410,7 @@ proc paintSearchMatches(widget: TranscriptWidget, canvas: var Canvas,
                         text: string, x, y, width: int) =
   if widget.searchQuery.len == 0 or width <= 0: return
   let plain = stripAnsi(text)
-  let needle = widget.searchQuery.toLowerAscii
+  let needle = widget.searchNeedle
   let lowerPlain = plain.toLowerAscii
   var startAt = 0
   while startAt < lowerPlain.len:

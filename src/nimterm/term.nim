@@ -173,6 +173,13 @@ proc termShutdown*() =
     discard tcSetAttr(STDIN_FILENO, TCSANOW, gOldTermios.addr)
     gTermActive = false
 
+proc terminalActive*(): bool = gTermActive
+
+proc suspendTerminal*() = termShutdown()
+
+proc resumeTerminal*() =
+  if not gTermActive: termInit(gCapabilities, gFullscreen)
+
 proc inputPending*(timeoutMs: int): bool =
   var fds: TFdSet
   FD_ZERO(fds)

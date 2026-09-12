@@ -34,6 +34,8 @@ type
     cursorCachePosition: int
     cursorCache: tuple[line, column: int]
     cursorValid: bool
+    undoStack: seq[tuple[text: string, cursor: int]]
+    yankText*: string
 
   WrappedInputLine = object
     text: string
@@ -60,6 +62,17 @@ proc invalidateTextLayout(widget: InputWidget) =
   widget.wrappedValid = false
   widget.cursorValid = false
 
+proc saveUndo(widget: InputWidget) =
+  if widget.undoStack.len == 0 or widget.undoStack[^1].text != widget.text or
+      widget.undoStack[^1].cursor != widget.cursor:
+    widget.undoStack.add (widget.text, widget.cursor)
+  if widget.undoStack.len > 100: widget.undoStack.delete(0)
+
+proc replaceText(widget: InputWidget, text: string, cursor: int) =
+  widget.text = text
+  widget.cursor = min(max(cursor, 0), text.len)
+  widget.invalidateTextLayout()
+
 method focusable*(widget: InputWidget): bool = true
 
 proc previousPosition(text: string, position: int): int =
@@ -76,17 +89,17 @@ proc nextPosition(text: string, position: int): int =
   fastRuneAt(text, result, rune)
 
 proc clear*(widget: InputWidget) =
-  widget.text = ""
-  widget.cursor = 0
-  widget.invalidateTextLayout()
+  widget.replaceText("", 0)
+  widget.undoStack.setLen(0)
+  widget.yankText = ""
 
 proc setText*(widget: InputWidget, text: string) =
-  widget.text = text
-  widget.cursor = text.len
-  widget.invalidateTextLayout()
+  widget.replaceText(text, text.len)
+  widget.undoStack.setLen(0)
 
 proc insert*(widget: InputWidget, piece: string) =
   if piece.len == 0: return
+  widget.saveUndo()
   let p = min(max(widget.cursor, 0), widget.text.len)
   widget.text = widget.text[0 ..< p] & piece & widget.text[p .. ^1]
   widget.cursor = p + piece.len
@@ -95,6 +108,8 @@ proc insert*(widget: InputWidget, piece: string) =
 proc deleteBefore(widget: InputWidget) =
   if widget.cursor == 0: return
   let start = previousPosition(widget.text, widget.cursor)
+  widget.saveUndo()
+  widget.yankText = widget.text[start ..< widget.cursor]
   widget.text = widget.text[0 ..< start] & widget.text[widget.cursor .. ^1]
   widget.cursor = start
   widget.invalidateTextLayout()
@@ -102,6 +117,8 @@ proc deleteBefore(widget: InputWidget) =
 proc deleteAfter(widget: InputWidget) =
   if widget.cursor == widget.text.len: return
   let finish = nextPosition(widget.text, widget.cursor)
+  widget.saveUndo()
+  widget.yankText = widget.text[widget.cursor ..< finish]
   widget.text = widget.text[0 ..< widget.cursor] & widget.text[finish .. ^1]
   widget.invalidateTextLayout()
 
@@ -134,6 +151,55 @@ proc wordForward(widget: InputWidget) =
     fastRuneAt(widget.text, next, rune)
     if rune.isWhiteSpace: break
     widget.cursor = next
+
+proc deleteWordBackward(widget: InputWidget) =
+  let finish = widget.cursor
+  if finish == 0: return
+  widget.saveUndo()
+  widget.wordBackward()
+  let start = widget.cursor
+  if start == finish: return
+  widget.yankText = widget.text[start ..< finish]
+  widget.replaceText(widget.text[0 ..< start] & widget.text[finish .. ^1], start)
+
+proc deleteWordForward(widget: InputWidget) =
+  let start = widget.cursor
+  if start == widget.text.len: return
+  widget.saveUndo()
+  widget.wordForward()
+  let finish = widget.cursor
+  widget.yankText = widget.text[start ..< finish]
+  widget.replaceText(widget.text[0 ..< start] & widget.text[finish .. ^1], start)
+
+proc deleteToLineStart(widget: InputWidget) =
+  var line = -1
+  if widget.cursor > 0:
+    for i in countdown(widget.cursor - 1, 0):
+      if widget.text[i] == '\n':
+        line = i
+        break
+  let start = if line < 0: 0 else: line + 1
+  if start == widget.cursor: return
+  widget.saveUndo()
+  widget.yankText = widget.text[start ..< widget.cursor]
+  widget.replaceText(widget.text[0 ..< start] & widget.text[widget.cursor .. ^1], start)
+
+proc deleteToLineEnd(widget: InputWidget) =
+  var finish = widget.cursor
+  while finish < widget.text.len and widget.text[finish] != '\n': inc finish
+  let stop = finish
+  if stop == widget.cursor: return
+  widget.saveUndo()
+  widget.yankText = widget.text[widget.cursor ..< stop]
+  widget.replaceText(widget.text[0 ..< widget.cursor] & widget.text[stop .. ^1], widget.cursor)
+
+proc undo*(widget: InputWidget) =
+  if widget.undoStack.len == 0: return
+  let state = widget.undoStack.pop()
+  widget.replaceText(state.text, state.cursor)
+
+proc yank*(widget: InputWidget) =
+  widget.insert(widget.yankText)
 
 proc cursorLocation(text: string, cursor: int): tuple[line, column: int] =
   let stop = min(max(cursor, 0), text.len)
@@ -270,6 +336,8 @@ method handle*(widget: InputWidget, event: UiEvent): EventResponse =
     widget.insert(event.text)
   of keyBackspace:
     widget.deleteBefore()
+  of keyCtrlD:
+    widget.deleteAfter()
   of keyDelete:
     widget.deleteAfter()
   of keyLeft, keyCtrlB:
@@ -280,6 +348,10 @@ method handle*(widget: InputWidget, event: UiEvent): EventResponse =
     widget.wordBackward()
   of keyAltF:
     widget.wordForward()
+  of keyCtrlW:
+    widget.deleteWordBackward()
+  of keyAltD:
+    widget.deleteWordForward()
   of keyUp:
     widget.moveVertical(-1)
   of keyDown:
@@ -289,7 +361,13 @@ method handle*(widget: InputWidget, event: UiEvent): EventResponse =
   of keyEnd, keyCtrlE:
     widget.cursor = widget.text.len
   of keyCtrlU:
-    widget.clear()
+    widget.deleteToLineStart()
+  of keyCtrlK:
+    widget.deleteToLineEnd()
+  of keyCtrlY:
+    widget.yank()
+  of keyCtrlZ:
+    widget.undo()
   of keyShiftEnter:
     widget.insert("\n")
   of keyEnter:

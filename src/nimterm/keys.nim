@@ -55,6 +55,7 @@ type
     keyCopy         ## copy the selected transcript text
     keyAltB
     keyAltF
+    keyAltD
     keyAltUp
     keyAltEnter
     keyTab

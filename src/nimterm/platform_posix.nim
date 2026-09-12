@@ -265,3 +265,6 @@ method present*(backend: PosixBackend, frame: Canvas) =
   backend.hasPrevious = true
   stdout.write(output)
   stdout.flushFile()
+
+method resetPresentation*(backend: PosixBackend) =
+  backend.hasPrevious = false

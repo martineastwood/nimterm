@@ -35,3 +35,5 @@ method wake*(backend: TerminalBackend) {.base.} = discard
 
 method present*(backend: TerminalBackend, frame: Canvas) {.base.} =
   discard frame
+
+method resetPresentation*(backend: TerminalBackend) {.base.} = discard

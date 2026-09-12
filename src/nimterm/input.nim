@@ -224,6 +224,9 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
   if ch2 == ord('f') or ch2 == ord('F'):
     result.key = keyAltF
     return
+  if ch2 == ord('d') or ch2 == ord('D'):
+    result.key = keyAltD
+    return
   if ch2 == ord('O'):
     let ch3 = readNext(50)
     if ch3 < 0: return

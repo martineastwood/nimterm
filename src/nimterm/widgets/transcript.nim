@@ -33,6 +33,10 @@ type
     selectionEnd*: int
     selectionStartCol*: int
     selectionEndCol*: int
+    searchQuery*: string
+    searchMatches*: seq[int]
+    searchIndex*: int
+    searchStyle*: Style
     toolDetails*: proc (name: string, input: JsonNode,
                         output: string): seq[string] {.closure.}
     cachedWidth: int
@@ -64,7 +68,8 @@ proc newTranscriptWidget*(transcript = transcript_model.newTranscript(),
     assistantStyle: assistantStyle, thinkingStyle: thinkingStyle,
     toolStyle: toolStyle, errorStyle: errorStyle,
     viewport: newScrollView(), selectionStart: -1,
-    selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1)
+    selectionEnd: -1, selectionStartCol: -1, selectionEndCol: -1,
+    searchIndex: -1, searchStyle: defaultStyle())
 
 proc invalidateLines*(widget: TranscriptWidget) =
   widget.linesValid = false
@@ -237,7 +242,8 @@ proc ensureLayout(widget: TranscriptWidget) =
   var total = 0
   for i, item in widget.transcript.items:
     let cache = addr widget.itemCaches[i]
-    if cache[].revision != item.revision or cache[].width != widget.area.w:
+    if cache[].revision != item.revision or cache[].width != widget.area.w or
+        cache[].lines.len == 0:
       cache[].lines.setLen(0)
       let style = widget.itemStyle(item.kind)
       let railStyle = widget.itemRailStyle(item.kind)
@@ -345,6 +351,59 @@ proc selectedText*(widget: TranscriptWidget): string =
     if selected.len == 0: continue
     if result.len > 0: result.add '\n'
     result.add selected
+
+proc revealSearchMatch(widget: TranscriptWidget) =
+  if widget.searchIndex < 0 or widget.searchIndex >= widget.searchMatches.len:
+    return
+  widget.viewport.update(widget.lineCount(), widget.area.h)
+  let target = widget.searchMatches[widget.searchIndex]
+  widget.viewport.offset = clamp(target - widget.area.h div 2,
+    0, widget.viewport.maxOffset)
+  widget.viewport.followTail = widget.viewport.offset == widget.viewport.maxOffset
+
+proc setSearch*(widget: TranscriptWidget, query: string): int =
+  widget.searchQuery = query.strip
+  widget.searchMatches.setLen(0)
+  widget.searchIndex = -1
+  if widget.searchQuery.len == 0:
+    return
+  let needle = widget.searchQuery.toLowerAscii
+  for i in 0 ..< widget.lineCount():
+    if stripAnsi(widget.lineAt(i).text).toLowerAscii.find(needle) >= 0:
+      widget.searchMatches.add i
+  if widget.searchMatches.len > 0:
+    widget.searchIndex = 0
+    widget.revealSearchMatch()
+  widget.searchMatches.len
+
+proc clearSearch*(widget: TranscriptWidget) =
+  discard widget.setSearch("")
+
+proc nextSearch*(widget: TranscriptWidget, backwards = false): bool =
+  if widget.searchMatches.len == 0: return false
+  let step = if backwards: -1 else: 1
+  widget.searchIndex = (widget.searchIndex + step + widget.searchMatches.len) mod
+    widget.searchMatches.len
+  widget.revealSearchMatch()
+  true
+
+proc paintSearchMatches(widget: TranscriptWidget, canvas: var Canvas,
+                        text: string, x, y, width: int) =
+  if widget.searchQuery.len == 0 or width <= 0: return
+  let plain = stripAnsi(text)
+  let needle = widget.searchQuery.toLowerAscii
+  let lowerPlain = plain.toLowerAscii
+  var startAt = 0
+  while startAt < lowerPlain.len:
+    let hit = lowerPlain.find(needle, startAt)
+    if hit < 0: break
+    let before = ansiVisibleWidth(plain[0 ..< hit])
+    let matchWidth = max(1, ansiVisibleWidth(plain[hit ..< hit + needle.len]))
+    for column in before ..< min(width, before + matchWidth):
+      var cell = canvas.getCell(x + column, y)
+      cell.style = widget.searchStyle
+      canvas.setCell(x + column, y, cell)
+    startAt = hit + max(1, needle.len)
 
 proc copySelection*(widget: TranscriptWidget): EventResponse =
   let text = widget.selectedText()
@@ -487,8 +546,12 @@ method paint*(widget: TranscriptWidget, canvas: var Canvas) =
         canvas.writeText(widget.area.x, y, rail, railStyle, 1)
         canvas.writeAnsiText(widget.area.x + 1, y, body, lineStyle,
           max(0, widget.area.w - 1))
+        widget.paintSearchMatches(canvas, body, widget.area.x + 1, y,
+          max(0, widget.area.w - 1))
       else:
         canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle,
+          widget.area.w)
+        widget.paintSearchMatches(canvas, line.text, widget.area.x, y,
           widget.area.w)
       let bounds = widget.selectionColumns(i)
       if bounds.lo >= 0:

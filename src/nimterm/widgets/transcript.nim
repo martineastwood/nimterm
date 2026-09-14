@@ -82,6 +82,10 @@ proc invalidateLines*(widget: TranscriptWidget) =
 proc invalidateLayout(widget: TranscriptWidget) =
   widget.linesValid = false
 
+proc contentWidth(widget: TranscriptWidget): int =
+  ## Reserve the final column for the scrollbar so text never hides beneath it.
+  if widget.area.w <= 1: widget.area.w else: widget.area.w - 1
+
 proc appendUser*(widget: TranscriptWidget, text: string) =
   widget.transcript.appendUser(text)
   widget.invalidateLayout()
@@ -109,7 +113,8 @@ proc itemLines(widget: TranscriptWidget,
     for line in item.text.splitLines:
       result.add "│ " & currentTheme.paint(currentTheme.boldAccent, line)
   of tikAssistant:
-    let text = markdown_renderer.renderMarkdown(item.text, true, widget.area.w)
+    let text = markdown_renderer.renderMarkdown(item.text, true,
+      widget.contentWidth)
     for line in text.splitLines:
       result.add line
   of tikThinking:
@@ -215,7 +220,7 @@ proc wrapTranscriptLine(text: string, width: int,
     inc prefixLen
   prefix = if prefixLen > 0: text[0 ..< prefixLen] else: ""
   let body = if prefixLen < text.len: text[prefixLen .. ^1] else: ""
-  for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix))):
+  for chunk in wrapAnsi(body, max(1, width - ansiVisibleWidth(prefix)), true):
     result.add prefix & chunk
 
 proc hiddenThinkingDelta(widget: TranscriptWidget, event: AgentUiEvent): bool =
@@ -236,7 +241,8 @@ proc awaitingApproval*(widget: TranscriptWidget): bool =
       return true
 
 proc ensureLayout(widget: TranscriptWidget) =
-  if widget.linesValid and widget.cachedWidth == widget.area.w:
+  let width = widget.contentWidth
+  if widget.linesValid and widget.cachedWidth == width:
     return
   if widget.itemCaches.len != widget.transcript.items.len:
     widget.itemCaches.setLen(widget.transcript.items.len)
@@ -244,7 +250,7 @@ proc ensureLayout(widget: TranscriptWidget) =
   var total = 0
   for i, item in widget.transcript.items:
     let cache = addr widget.itemCaches[i]
-    if cache[].revision != item.revision or cache[].width != widget.area.w or
+    if cache[].revision != item.revision or cache[].width != width or
         cache[].lines.len == 0:
       cache[].lines.setLen(0)
       let style = widget.itemStyle(item.kind)
@@ -256,17 +262,17 @@ proc ensureLayout(widget: TranscriptWidget) =
         let preservePrefix = item.kind in {tikUser, tikTool, tikStatus}
         let hasRail = item.kind in {tikUser, tikTool} and
           (line.startsWith("│") or line.startsWith("▌"))
-        for wrapped in wrapTranscriptLine(line, widget.area.w, preservePrefix):
+        for wrapped in wrapTranscriptLine(line, width, preservePrefix):
           cache[].lines.add TranscriptLine(text: wrapped,
             searchText: stripAnsi(wrapped).toLowerAscii, style: style,
             railStyle: railStyle, hasRail: hasRail)
       cache[].revision = item.revision
-      cache[].width = widget.area.w
+      cache[].width = width
     if i > 0: inc total
     widget.itemStarts[i] = total
     total += cache[].lines.len
   widget.totalLineCount = total
-  widget.cachedWidth = widget.area.w
+  widget.cachedWidth = width
   widget.linesValid = true
 
 proc lineCount(widget: TranscriptWidget): int =
@@ -295,18 +301,19 @@ proc selectionColumns(widget: TranscriptWidget, line: int): tuple[lo, hi: int] =
   let endLine = widget.selectionEnd
   let startCol = widget.selectionStartCol
   let endCol = widget.selectionEndCol
+  let lastCol = widget.contentWidth - 1
   if startLine == endLine:
     if line == startLine: result = (min(startCol, endCol), max(startCol, endCol))
   elif startLine < endLine:
-    if line == startLine: result = (startCol, widget.area.w - 1)
+    if line == startLine: result = (startCol, lastCol)
     elif line == endLine: result = (0, endCol)
-    elif line > startLine and line < endLine: result = (0, widget.area.w - 1)
+    elif line > startLine and line < endLine: result = (0, lastCol)
   elif line == startLine:
-    result = (startCol, widget.area.w - 1)
+    result = (startCol, lastCol)
   elif line == endLine:
     result = (0, endCol)
   elif line < startLine and line > endLine:
-    result = (0, widget.area.w - 1)
+    result = (0, lastCol)
 
 proc runeSlice(text: string, first, last: int): string =
   if first > last: return
@@ -511,20 +518,20 @@ method handle*(widget: TranscriptWidget, event: UiEvent): EventResponse =
       widget.selectionStart = line
       widget.selectionEnd = line
       widget.selectionStartCol = clamp(event.x - widget.area.x, 0,
-        max(0, widget.area.w - 1))
+        max(0, widget.contentWidth - 1))
       widget.selectionEndCol = widget.selectionStartCol
       return captureHandled()
     of umDrag:
       if widget.selectionStart >= 0:
         widget.selectionEnd = line
         widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
-          max(0, widget.area.w - 1))
+          max(0, widget.contentWidth - 1))
         return eventHandled
     of umRelease:
       if widget.selectionStart >= 0:
         widget.selectionEnd = line
         widget.selectionEndCol = clamp(event.x - widget.area.x, 0,
-          max(0, widget.area.w - 1))
+          max(0, widget.contentWidth - 1))
         let copy = widget.copySelection()
         result = releaseHandled()
         result.action = copy.action
@@ -551,30 +558,29 @@ method paint*(widget: TranscriptWidget, canvas: var Canvas) =
   let start = widget.viewport.offset
   let stop = min(count, start + widget.area.h)
   if start < stop:
+    let width = widget.contentWidth
     var y = widget.area.y
     for i in start ..< stop:
       let line = widget.lineAt(i)
       let lineStyle = line.style
       let railStyle = line.railStyle
-      for x in widget.area.x ..< widget.area.x + widget.area.w:
+      for x in widget.area.x ..< widget.area.x + width:
         canvas.setCell(x, y, Cell(glyph: Rune(32), style: lineStyle))
       if line.hasRail:
-        let railLen = if line.text.startsWith("▌"): "▌".len else: "│".len
+        let railLen = if line.text.startsWith(""): "▌".len else: "│".len
         let rail = line.text[0 ..< railLen]
         let body = if line.text.len > railLen: line.text[railLen .. ^1] else: ""
         canvas.writeText(widget.area.x, y, rail, railStyle, 1)
         canvas.writeAnsiText(widget.area.x + 1, y, body, lineStyle,
-          max(0, widget.area.w - 1))
+          max(0, width - 1))
         widget.paintSearchMatches(canvas, body, widget.area.x + 1, y,
-          max(0, widget.area.w - 1))
+          max(0, width - 1))
       else:
-        canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle,
-          widget.area.w)
-        widget.paintSearchMatches(canvas, line.text, widget.area.x, y,
-          widget.area.w)
+        canvas.writeAnsiText(widget.area.x, y, line.text, lineStyle, width)
+        widget.paintSearchMatches(canvas, line.text, widget.area.x, y, width)
       let bounds = widget.selectionColumns(i)
       if bounds.lo >= 0:
-        for x in max(0, bounds.lo) .. min(widget.area.w - 1, bounds.hi):
+        for x in max(0, bounds.lo) .. min(width - 1, bounds.hi):
           var cell = canvas.getCell(widget.area.x + x, y)
           cell.style = widget.selectionStyle
           canvas.setCell(widget.area.x + x, y, cell)

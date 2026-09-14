@@ -805,19 +805,32 @@ suite "transcript":
     check "┌" in canvas.plainText
     check "│ A" in canvas.plainText
 
-  test "wraps long transcript lines":
+  test "wraps long transcript lines outside the scrollbar column":
     var transcript = newTranscript()
     transcript.appendUser("abcdefgh")
     let view = newTranscriptWidget(transcript)
     var canvas = newCanvas(size(8, 8))
     view.render(canvas, rect(0, 0, 8, 8))
-    check "│ abcdef" in canvas.plainText
-    check "│ gh" in canvas.plainText
+    check "│ abcde" in canvas.plainText
+    check "│ fgh" in canvas.plainText
+
+  test "wraps transcript lines at whitespace":
+    var transcript = newTranscript()
+    transcript.appendUser("one two three")
+    let view = newTranscriptWidget(transcript)
+    var canvas = newCanvas(size(10, 8))
+    view.render(canvas, rect(0, 0, 10, 8))
+    check "│ one" in canvas.plainText
+    check "│ two" in canvas.plainText
+    check "│ three" in canvas.plainText
+    check "│ one t" notin canvas.plainText
 
   test "transcript selection tolerates empty and unicode rows":
     var transcript = newTranscript()
     transcript.appendUser("hello")
     let view = newTranscriptWidget(transcript)
+    var canvas = newCanvas(size(20, 6))
+    view.render(canvas, rect(0, 0, 20, 6))
     view.selectionStart = 1
     view.selectionEnd = 1
     view.selectionStartCol = 0

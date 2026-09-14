@@ -1,5 +1,6 @@
 ## Multiple-choice question with an optional free-text answer.
 
+import std/math
 import std/strutils
 from std/unicode import Rune
 import ../canvas
@@ -76,7 +77,7 @@ proc cancel*(widget: QuestionWidget): EventResponse =
 proc moveSelection(widget: QuestionWidget, delta: int) =
   let count = widget.optionCount
   if count > 0:
-    widget.selected = clamp(widget.selected + delta, 0, count - 1)
+    widget.selected = floorMod(widget.selected + delta, count)
 
 proc promptLines(widget: QuestionWidget): seq[string] =
   widget.prompt.splitLines

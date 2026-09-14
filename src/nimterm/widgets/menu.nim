@@ -1,5 +1,6 @@
 ## Selectable label/description menu.
 
+import std/math
 import std/strutils
 import ../canvas
 import ../events
@@ -59,9 +60,12 @@ proc keepSelectionVisible(widget: Menu, rows: int) =
   elif widget.selected >= widget.scrollOffset + rows:
     widget.scrollOffset = widget.selected - rows + 1
 
-proc moveSelection(widget: Menu, delta: int) =
+proc moveSelection(widget: Menu, delta: int, wrap = false) =
   if widget.items.len == 0: return
-  widget.selected = clamp(widget.selected + delta, 0, widget.items.high)
+  widget.selected = if wrap:
+      floorMod(widget.selected + delta, widget.items.len)
+    else:
+      clamp(widget.selected + delta, 0, widget.items.high)
   widget.keepSelectionVisible(widget.contentRows)
 
 method handle*(widget: Menu, event: UiEvent): EventResponse =
@@ -82,9 +86,9 @@ method handle*(widget: Menu, event: UiEvent): EventResponse =
     return eventIgnored
   case event.key
   of keyUp:
-    widget.moveSelection(-1)
+    widget.moveSelection(-1, wrap = true)
   of keyDown:
-    widget.moveSelection(1)
+    widget.moveSelection(1, wrap = true)
   of keyPageUp:
     widget.moveSelection(-max(1, widget.contentRows - 1))
   of keyPageDown:

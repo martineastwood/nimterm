@@ -522,6 +522,21 @@ suite "core canvas and app":
     check response.action.kind == "select"
     check response.action.index == 1
 
+  test "menu steps wrap around while paging stays clamped":
+    let menu = newMenu(@[
+      MenuItem(label: "one"), MenuItem(label: "two"),
+      MenuItem(label: "three")])
+    var canvas = newCanvas(size(20, 5))
+    menu.render(canvas, rect(0, 0, 20, 5))
+    discard menu.handle(UiEvent(kind: uiKey, key: keyUp))
+    check menu.selected == 2
+    discard menu.handle(UiEvent(kind: uiKey, key: keyDown))
+    check menu.selected == 0
+    discard menu.handle(UiEvent(kind: uiKey, key: keyPageDown))
+    check menu.selected == 2
+    discard menu.handle(UiEvent(kind: uiKey, key: keyPageUp))
+    check menu.selected == 0
+
   test "menu keeps the selected row inside a bounded popup":
     var items: seq[MenuItem]
     for i in 0 ..< 10:
@@ -621,6 +636,14 @@ suite "core canvas and app":
     let question = newQuestion("Continue?", @[QuestionOption(label: "Yes")])
     let answer = question.handle(UiEvent(kind: uiKey, key: keyEscape)).action
     check answer.cancelled
+
+  test "question selection wraps around":
+    let question = newQuestion("Choose", @[QuestionOption(label: "one"),
+      QuestionOption(label: "two")], allowFreeText = false)
+    discard question.handle(UiEvent(kind: uiKey, key: keyUp))
+    check question.selected == 1
+    discard question.handle(UiEvent(kind: uiKey, key: keyDown))
+    check question.selected == 0
 
   test "question paints radio buttons":
     let question = newQuestion("Choose", @[QuestionOption(label: "one"),

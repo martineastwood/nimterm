@@ -1,0 +1,47 @@
+---
+title: nimterm
+description: Terminal UI primitives for Nim applications and agent frontends.
+template: splash
+hero:
+  title: Terminal UIs in Nim.
+  tagline: Geometry, cells, widgets, Markdown, and agent events for building native terminal frontends.
+  actions:
+    - text: Read the API reference
+      link: /reference/api/nimterm/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/martineastwood/nimterm
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Everything a terminal frontend needs
+
+<CardGrid stagger={true}>
+	<Card title="Testable rendering" icon="pencil">
+		Semantic terminal geometry, styles, cells, a testable canvas, and a
+		deterministic widget application loop.
+	</Card>
+	<Card title="Widgets" icon="setting">
+		Text, panels, input, menus, and multiple-choice questions, including a
+		retained transcript reducer for streamed turns.
+	</Card>
+	<Card title="Text layout" icon="open-book">
+		ANSI-aware layout and width handling, themes, Markdown, and terminal
+		input and control.
+	</Card>
+	<Card title="Agent-friendly events" icon="rocket">
+		Generic UI events plus an agent lifecycle vocabulary any event source can
+		be adapted to.
+	</Card>
+</CardGrid>
+
+## Explore the library
+
+<CardGrid>
+	<LinkCard title="API reference" description="Every exported module, type, and procedure." href="/reference/api/nimterm/" />
+	<LinkCard title="Platform backends" description="POSIX termios and native Windows console support." href="/reference/api/nimterm/app/" />
+	<LinkCard title="Niminal stack" description="See nimterm alongside the rest of the Niminal projects." href="https://niminal.dev" />
+</CardGrid>

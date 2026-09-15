@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightThemeBlack from 'starlight-theme-black';
+import starlightThemeNext from 'starlight-theme-next';
 
 export default defineConfig({
 	site: 'https://nimterm.niminal.dev',
@@ -9,13 +9,17 @@ export default defineConfig({
 		starlight({
 			title: 'nimterm',
 			description: 'Terminal UI primitives for Nim applications and agent frontends.',
+			customCss: ['./src/styles/sidebar.css'],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/martineastwood/nimterm' }],
-			plugins: [
-				starlightThemeBlack({
-					navLinks: [{ label: 'Niminal', link: 'https://niminal.dev' }],
-					docs: { showMarkdownActions: false },
-				}),
+			sidebar: [
+				{ label: 'Introduction', slug: 'index' },
+				{
+					label: 'API reference',
+					collapsed: true,
+					items: [{ autogenerate: { directory: 'reference/api' } }],
+				},
 			],
+			plugins: [starlightThemeNext()],
 		}),
 	],
 });

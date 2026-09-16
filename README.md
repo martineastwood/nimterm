@@ -23,3 +23,7 @@ backend at compile time.
 Use `newPlatformBackend(fullscreen = false)` to render in the normal terminal
 screen and preserve the completed interface in shell scrollback. The
 POSIX-specific `newPosixBackend` remains available for callers that need it.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

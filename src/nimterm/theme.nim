@@ -218,25 +218,28 @@ proc compileTheme*(spec: ThemeSpec, depth: ColorDepth): Theme =
   result.boldAccent = result.accent.withAttribute(attrBold)
   result.boldError = result.error.withAttribute(attrBold)
 
-let Dark256* = Theme(
-  name: "dark", colors: true,
-  accent: defaultStyle().withForeground(ansi16(6)),
-  success: defaultStyle().withForeground(ansi16(2)),
-  error: defaultStyle().withForeground(ansi16(1)),
-  warning: defaultStyle().withForeground(ansi16(3)),
-  code: defaultStyle().withForeground(ansi256(179)),
-  muted: defaultStyle().withForeground(ansi16(8)),
-  dim: defaultStyle().withAttribute(attrDim),
-  text: defaultStyle().withForeground(ansi16(7)),
-  heading: defaultStyle().withForeground(ansi16(4)).withAttribute(attrBold),
-  model: defaultStyle().withForeground(ansi16(5)),
-  panelBg: defaultStyle().withBackground(ansi256(236)),
-  selectedBg: defaultStyle().withBackground(ansi256(81)),
-  selectedFg: defaultStyle().withForeground(ansi16(0)),
-  boldAccent: defaultStyle().withForeground(ansi16(6)).withAttribute(attrBold),
-  boldError: defaultStyle().withForeground(ansi16(1)).withAttribute(attrBold))
+proc dark256Theme(): Theme =
+  Theme(
+    name: "dark", colors: true,
+    accent: defaultStyle().withForeground(ansi16(6)),
+    success: defaultStyle().withForeground(ansi16(2)),
+    error: defaultStyle().withForeground(ansi16(1)),
+    warning: defaultStyle().withForeground(ansi16(3)),
+    code: defaultStyle().withForeground(ansi256(179)),
+    muted: defaultStyle().withForeground(ansi16(8)),
+    dim: defaultStyle().withAttribute(attrDim),
+    text: defaultStyle().withForeground(ansi16(7)),
+    heading: defaultStyle().withForeground(ansi16(4)).withAttribute(attrBold),
+    model: defaultStyle().withForeground(ansi16(5)),
+    panelBg: defaultStyle().withBackground(ansi256(236)),
+    selectedBg: defaultStyle().withBackground(ansi256(81)),
+    selectedFg: defaultStyle().withForeground(ansi16(0)),
+    boldAccent: defaultStyle().withForeground(ansi16(6)).withAttribute(attrBold),
+    boldError: defaultStyle().withForeground(ansi16(1)).withAttribute(attrBold))
 
-currentTheme = Dark256
+let Dark256* = dark256Theme()
+
+currentTheme = dark256Theme()
 
 proc compileBuiltinTheme*(name: string, depth: ColorDepth):
                           tuple[ok: bool, theme: Theme] =

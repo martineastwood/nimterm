@@ -9,7 +9,7 @@ export default defineConfig({
 		starlight({
 			title: 'nimterm',
 			description: 'Build terminal and console apps for agents in Nim: cells, layout, agent-shaped widgets, Markdown, and lifecycle events.',
-			favicon: '/favicon.svg',
+			favicon: '/favicon.ico',
 			head: [
 				{ tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '48x48' } },
 				{ tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/favicon-32x32.png' } },

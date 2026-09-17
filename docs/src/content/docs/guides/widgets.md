@@ -24,6 +24,12 @@ Widgets are `ref` objects. When a constructor returns a concrete widget, use
 
 ## Choose a built-in widget
 
+The built-in set is shaped by agent frontends: show a streamed conversation,
+expose tool calls and diffs, and collect a decision. That is why there is a
+transcript and a diff card, and why there is no table, tree, or form widget. For
+an interface outside that shape, build a [custom widget](#create-a-custom-widget)
+or compose the containers below.
+
 | Widget | Use it for | Constructor |
 | --- | --- | --- |
 | `TextWidget` | One line of styled text | `newText` |

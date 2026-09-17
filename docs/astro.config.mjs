@@ -8,7 +8,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'nimterm',
-			description: 'Terminal UI primitives for Nim applications and agent frontends.',
+			description: 'Build terminal and console apps for agents in Nim: cells, layout, agent-shaped widgets, Markdown, and lifecycle events.',
 			customCss: ['./src/styles/sidebar.css'],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/martineastwood/nimterm' }],
 			sidebar: [
@@ -23,7 +23,7 @@ export default defineConfig({
 				{ label: 'Agent frontends', slug: 'guides/agent-frontends' },
 				{ label: 'Testing', slug: 'guides/testing' },
 				{
-					label: 'API reference',
+					label: 'API',
 					collapsed: true,
 					items: [
 						{ label: 'Overview', slug: 'reference/core-api' },

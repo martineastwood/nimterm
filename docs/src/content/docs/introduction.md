@@ -1,16 +1,23 @@
 ---
 title: Introduction
-description: Build native terminal interfaces in Nim with widgets, events, and a testable canvas.
+description: Build native terminal and console apps for agents in Nim with widgets, events, and a testable canvas.
 ---
 
-nimterm gives you the pieces to build an interactive terminal interface in
-Nim. You can compose retained widgets, render into terminal cells, receive
-keyboard and mouse input, and connect any event-producing application to the
-same event loop.
+nimterm gives you the terminal UI layer for apps that run an agent. You can
+render a streamed conversation, show tool calls and their results, ask for
+approval, collect a prompt, and keep everything in one interactive terminal
+session.
 
-It is useful for command-line tools, dashboards, chat applications, and agent
-frontends. The library does not depend on nimgent, so your event source can be
-an AI SDK, a subprocess, a network client, or your own application code.
+The widgets follow from that focus: transcript, card, diff, input, menu, and
+question. nimterm is a terminal UI library rather than a general-purpose widget
+toolkit, so there are no tables, trees, tabs, or form builders to learn. If your
+app displays agent output and collects the occasional decision, that set covers
+the whole path from events to terminal cells.
+
+nimterm is the UI layer only. It does not call models, run tools, or store
+sessions. It does not depend on nimgent either, so adapt any AI SDK, subprocess,
+or remote service to the event vocabulary and render it. nimlet, the Niminal
+coding agent, uses that path for its interactive terminal app.
 
 ## Your first app
 
@@ -59,7 +66,7 @@ custom widgets, a host-owned loop, or deterministic rendering tests.
 ## Next steps
 
 - [Quickstart](/guides/quickstart/) to build an interactive app.
-- [Application loop](/guides/application-loop/) to integrate timers and event sources.
-- [Widgets](/guides/widgets/) to compose and style a UI tree.
 - [Agent frontends](/guides/agent-frontends/) to display streamed model or agent events.
+- [Widgets](/guides/widgets/) to compose and style a UI tree.
+- [Application loop](/guides/application-loop/) to integrate timers and event sources.
 - [Core API](/reference/core-api/) for the entry points used most often.

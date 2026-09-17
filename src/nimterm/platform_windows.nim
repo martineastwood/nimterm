@@ -1,15 +1,16 @@
 ## Windows terminal backend.
 
 import std/[monotimes, os, strutils, times, winlean]
-from std/unicode import toUTF8
 import ./backend
 import ./canvas
 import ./events
+import ./frame
 import ./geometry
 import ./input
 import ./keys
-import ./style
 import ./term
+
+export frame
 
 type
   WindowsBackend* = ref object of TerminalBackend
@@ -102,98 +103,21 @@ proc inputReady(backend: WindowsBackend, timeoutMs: int): bool =
       discard waitForSingleObject(backend.wakeEvent, 25)
 
 method size*(backend: WindowsBackend): Size =
-  discard backend
   size(termWidth(), termHeight())
 
 method readEvent*(backend: WindowsBackend, timeoutMs: int): UiEvent =
   let nowMs = getMonoTime().ticks div 1_000_000
   var input = backend.decoder.nextEvent(nowMs)
-  if input.key == keyNone and input.mouse == mouseNone and
-      input.scrollDelta == 0 and input.focus == focusNone:
-    let escapeWait = backend.decoder.escapeWaitMs(nowMs)
-    let wait = if escapeWait < 0: timeoutMs
-               elif timeoutMs < 0: escapeWait
-               else: min(timeoutMs, escapeWait)
-    if backend.inputReady(wait): backend.decoder.feed(readAvailable())
+  if input.noEvent:
+    if backend.inputReady(backend.decoder.waitForInput(nowMs, timeoutMs)):
+      backend.decoder.feed(readAvailable())
     if consumeResize():
       return UiEvent(kind: uiResize, width: termWidth(), height: termHeight())
     input = backend.decoder.nextEvent(getMonoTime().ticks div 1_000_000)
-  input.toUiEvent(termWidth(), termHeight())
-
-proc sameCell(a, b: Cell): bool =
-  a.glyph.int == b.glyph.int and a.combining == b.combining and
-  a.continuation == b.continuation and a.style == b.style
-
-proc colorParams(color: ColorValue, background: bool): string =
-  case color.kind
-  of colorDefault:
-    return ""
-  of colorAnsi16:
-    let index = color.value
-    if background:
-      return $(if index < 8: 40 + index else: 100 + index - 8)
-    return $(if index < 8: 30 + index else: 90 + index - 8)
-  of colorAnsi256:
-    return (if background: "48" else: "38") & ";5;" & $color.value
-  of colorRgb:
-    return (if background: "48" else: "38") & ";2;" & $color.r & ";" &
-      $color.g & ";" & $color.b
-
-proc sgr(style: Style): string =
-  var params: seq[string]
-  if attrBold in style.attributes: params.add "1"
-  if attrDim in style.attributes: params.add "2"
-  if attrItalic in style.attributes: params.add "3"
-  if attrUnderline in style.attributes: params.add "4"
-  if attrReverse in style.attributes: params.add "7"
-  if attrStrikethrough in style.attributes: params.add "9"
-  let foreground = colorParams(style.foreground, false)
-  let background = colorParams(style.background, true)
-  if foreground.len > 0: params.add foreground
-  if background.len > 0: params.add background
-  if params.len > 0: "\e[" & params.join(";") & "m" else: ""
-
-proc frameOutput*(frame, previous: Canvas, force = false): string =
-  let full = force or frame.size != previous.size
-  var output = newStringOfCap(frame.size.w * frame.size.h * 2)
-  var activeStyle = defaultStyle()
-  var hasStyle = false
-  for y in 0 ..< frame.size.h:
-    var first = 0
-    var last = frame.size.w - 1
-    if not full:
-      while first <= last and sameCell(frame.getCell(first, y),
-          previous.getCell(first, y)): inc first
-      while last >= first and sameCell(frame.getCell(last, y),
-          previous.getCell(last, y)): dec last
-      if first > last: continue
-      if frame.getCell(first, y).continuation or
-          previous.getCell(first, y).continuation: dec first
-      if last + 1 < frame.size.w and
-          (frame.getCell(last + 1, y).continuation or
-           previous.getCell(last + 1, y).continuation): inc last
-    output.add "\e[" & $(y + 1) & ";" & $(first + 1) & "H"
-    for x in first .. last:
-      let cell = frame.getCell(x, y)
-      if not hasStyle or activeStyle != cell.style:
-        output.add "\e[0m"
-        output.add sgr(cell.style)
-        activeStyle = cell.style
-        hasStyle = true
-      if not cell.continuation:
-        output.add toUTF8(cell.glyph) & cell.combining
-      if attrStrikethrough in cell.style.attributes and cell.glyph.int != 32:
-        output.add "\u0336"
-  if output.len > 0: output.add "\e[0m"
-  output
+  input
 
 method present*(backend: WindowsBackend, frame: Canvas) =
-  let output = frame.frameOutput(backend.previous, not backend.hasPrevious)
-  if output.len == 0: return
-  backend.previous = frame.copy
-  backend.hasPrevious = true
-  stdout.write(output)
-  stdout.flushFile()
+  presentFrame(backend.previous, backend.hasPrevious, frame)
 
 method resetPresentation*(backend: WindowsBackend) =
   backend.hasPrevious = false

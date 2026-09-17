@@ -8,7 +8,7 @@ when not defined(windows):
 else:
   import nimterm/platform_windows
 
-proc decodeBytes(bytes: string): InputEvent =
+proc decodeBytes(bytes: string): UiEvent =
   var index = 1
   proc nextByte(timeoutMs: int): int =
     discard timeoutMs
@@ -39,13 +39,10 @@ suite "terminal input decoding":
         var decoder: InputDecoder
         decoder.feed(bytes[0 ..< split])
         let partial = decoder.nextEvent(100)
-        check partial.key == keyNone
-        check partial.mouse == mouseNone
-        check partial.focus == focusNone
+        check partial.kind == uiNone
         decoder.feed(bytes[split .. ^1])
         let complete = decoder.nextEvent(100)
-        check complete.key != keyNone or complete.mouse != mouseNone or
-          complete.scrollDelta != 0 or complete.focus != focusNone
+        check complete.kind != uiNone
 
   test "distinguishes escape from complete and partial control sequences":
     check decodeBytes("\e").key == keyEscape
@@ -86,10 +83,10 @@ suite "terminal input decoding":
 
   test "decodes SGR mouse press drag release and wheel":
     let press = decodeBytes("\e[<0;3;4M")
-    check press.mouse == mousePress
-    check (press.mouseX, press.mouseY) == (2, 3)
-    check decodeBytes("\e[<32;3;4M").mouse == mouseDrag
-    check decodeBytes("\e[<0;3;4m").mouse == mouseRelease
+    check press.mouse == umPress
+    check (press.x, press.y) == (2, 3)
+    check decodeBytes("\e[<32;3;4M").mouse == umDrag
+    check decodeBytes("\e[<0;3;4m").mouse == umRelease
     check decodeBytes("\e[<65;3;4M").scrollDelta == -3
     let modified = decodeBytes("\e[<30;3;4M")
     check modified.button == umbRight
@@ -100,8 +97,8 @@ suite "terminal input decoding":
     check decodeBytes("\xE7\x95").text == "\xE7\x95"
 
   test "decodes terminal focus reports":
-    check decodeBytes("\e[I").focus == focusIn
-    check decodeBytes("\e[O").focus == focusOut
+    check decodeBytes("\e[I").focused
+    check not decodeBytes("\e[O").focused
 
   test "enables only declared terminal protocols":
     let basic = TerminalCapabilities(bracketedPaste: true, focusEvents: true)
@@ -177,27 +174,15 @@ suite "markdown":
 
 suite "themes":
   test "compiles built-in themes":
-    let compiled = compileNamedTheme("dark", cd256)
+    let compiled = compileBuiltinTheme("dark", cd256)
     check compiled.ok
-    check compiled.theme.accent == Dark256.accent
+    check compiled.theme.accent.ansi == "\e[36m"
 
   test "keeps muted greys visible at 16-colour depth":
     let dark = compileTheme(DarkSpec, cd16)
     let light = compileTheme(LightSpec, cd16)
-    check dark.muted == "\e[90m"
-    check light.muted == "\e[90m"
-
-  test "parses a complete custom theme":
-    let doc = %*{
-      "name": "custom",
-      "colors": {
-        "accent": "#00ffff", "success": "#00ff00", "error": "#ff0000",
-        "warning": "#ffff00", "code": "#afaf00", "muted": 242, "dim": "dim", "text": "#fff",
-        "heading": "#fff", "model": "#f0f", "panelBg": "#000000",
-        "selectedBg": "#ffffff", "selectedFg": "#000000"
-      }
-    }
-    check parseThemeJson(doc).ok
+    check dark.muted.ansi == "\e[90m"
+    check light.muted.ansi == "\e[90m"
 
 suite "scroll view":
   test "follows appended content only while anchored at the tail":

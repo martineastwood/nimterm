@@ -58,8 +58,8 @@ application. Use `agentEvent` and `quitEvent` for the common wrapper events.
 
 ## Themes and terminal control
 
-Use `detectDepth`, `applyTheme`, `listThemeNames`, and `currentTheme` for
-palette selection. Use `termInit`, `termShutdown`, `terminalIsInteractive`,
+Use `detectDepth`, `compileBuiltinTheme`, `compileTheme`, `setTheme`, and
+`currentTheme` for palette selection. Use `termInit`, `termShutdown`, `terminalIsInteractive`,
 `termWidth`, and `termHeight` when integrating terminal control directly.
 Import `nimterm/term` for those terminal-control procedures. Most applications
 should let `App` manage the terminal lifecycle.

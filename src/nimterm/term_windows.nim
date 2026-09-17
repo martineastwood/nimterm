@@ -7,15 +7,14 @@
 
 import std/[base64, os, osproc, strutils, terminal, winlean]
 import ./backend
+import ./term_common
+
+export term_common
 
 type
   TermError* = object of CatchableError
 
 var
-  gTermActive = false
-  gLastW, gLastH: int
-  gCapabilities: TerminalCapabilities
-  gFullscreen: bool
   gInputHandle: Handle
   gOutputHandle: Handle
   gInputMode: DWORD
@@ -38,31 +37,6 @@ proc validHandle(handle: Handle): bool =
 proc winConsoleMode(handle: Handle, mode: var DWORD): bool =
   validHandle(handle) and getConsoleMode(handle, addr mode) != 0
 
-proc measureTerm(): tuple[w, h: int] =
-  try:
-    result.w = terminalWidth()
-  except CatchableError:
-    result.w = 80
-  try:
-    result.h = terminalHeight()
-  except CatchableError:
-    result.h = 24
-  if result.w <= 0: result.w = 80
-  if result.h <= 0: result.h = 24
-
-proc termWidth*(): int =
-  if gLastW <= 0:
-    let s = measureTerm()
-    gLastW = s.w
-    gLastH = s.h
-  gLastW
-
-proc termHeight*(): int =
-  if gLastH <= 0: discard termWidth()
-  gLastH
-
-proc termWrite(s: string) = stdout.write(s)
-
 proc copyToClipboard*(text: string) =
   if not gTermActive: return
   ## OSC 52 is understood by Windows Terminal and most modern Git Bash hosts.
@@ -70,49 +44,6 @@ proc copyToClipboard*(text: string) =
   stdout.flushFile()
   ## Keep a reliable fallback for classic PowerShell/conhost sessions.
   discard execCmdEx("clip.exe", input = text)
-
-proc hideCursor() = termWrite("\e[?25l")
-proc showCursor() = termWrite("\e[?25h")
-proc clearScreen() = termWrite("\e[2J\e[H")
-
-proc enableMouse(): string = "\e[?1000h\e[?1002h\e[?1006h"
-proc disableMouse(): string = "\e[?1006l\e[?1002l\e[?1000l\e[?1007l"
-proc enableKittyKeyboard(): string = "\e[>1u"
-proc disableKittyKeyboard(): string = "\e[<u"
-proc enableModifyOtherKeys(): string = "\e[>4;2m"
-proc disableModifyOtherKeys(): string = "\e[>4;0m"
-proc enableBracketedPaste(): string = "\e[?2004h"
-proc disableBracketedPaste(): string = "\e[?2004l"
-
-proc enableProtocols*(caps: TerminalCapabilities): string =
-  if caps.mouse: result.add enableMouse()
-  if caps.focusEvents: result.add "\e[?1004h"
-  if caps.kittyKeyboard: result.add enableKittyKeyboard()
-  elif caps.modifyOtherKeys: result.add enableModifyOtherKeys()
-  if caps.bracketedPaste: result.add enableBracketedPaste()
-
-proc disableProtocols*(caps: TerminalCapabilities): string =
-  if caps.bracketedPaste: result.add disableBracketedPaste()
-  if caps.kittyKeyboard: result.add disableKittyKeyboard()
-  elif caps.modifyOtherKeys: result.add disableModifyOtherKeys()
-  if caps.focusEvents: result.add "\e[?1004l"
-  if caps.mouse: result.add disableMouse()
-
-proc useAltScreen(): bool =
-  let term = getEnv("TERM").toLowerAscii
-  ## An empty TERM is normal in classic PowerShell/conhost and still supports
-  ## the Windows alternate-screen sequence once VT processing is enabled.
-  term.len == 0 or "xterm" in term or "screen" in term or "tmux" in term or
-    "alacritty" in term or "kitty" in term or "rxvt" in term or
-    "vt100" in term
-
-proc enterAltScreen() =
-  if useAltScreen(): termWrite("\e[?1049h")
-  else: clearScreen()
-
-proc leaveAltScreen() =
-  if useAltScreen(): termWrite("\e[?1049l")
-  else: clearScreen()
 
 proc termShutdown*()
 
@@ -144,19 +75,8 @@ proc termInit*(capabilities = defaultCapabilities(), fullscreen = true) =
       raiseOSError(osLastError())
     gOutputModeSaved = true
 
-  gCapabilities = capabilities
-  gFullscreen = fullscreen
-  gTermActive = true
   try:
-    gLastW = termWidth()
-    gLastH = termHeight()
-    if fullscreen: enterAltScreen()
-    else: termWrite("\n".repeat(gLastH) & "\e[H")
-    termWrite("\e[?6l\e[r")
-    if fullscreen: clearScreen()
-    hideCursor()
-    termWrite(enableProtocols(capabilities))
-    stdout.flushFile()
+    termEnterScreen(capabilities, fullscreen)
   except CatchableError:
     termShutdown()
     raise
@@ -164,11 +84,7 @@ proc termInit*(capabilities = defaultCapabilities(), fullscreen = true) =
 proc termShutdown*() =
   if not gTermActive: return
   try:
-    termWrite(disableProtocols(gCapabilities))
-    showCursor()
-    if gFullscreen: leaveAltScreen()
-    else: termWrite("\e[999B\r\n")
-    stdout.flushFile()
+    termLeaveScreen()
   finally:
     if gInputModeSaved:
       discard setConsoleMode(gInputHandle, gInputMode)
@@ -179,7 +95,6 @@ proc termShutdown*() =
     gInputIsConsole = false
     gTermActive = false
 
-proc terminalActive*(): bool = gTermActive
 proc suspendTerminal*() = termShutdown()
 proc resumeTerminal*() =
   if not gTermActive: termInit(gCapabilities, gFullscreen)
@@ -245,11 +160,3 @@ proc readAvailable*(): string =
     let value = readByte()
     if value < 0: break
     result.add char(value)
-
-proc consumeResize*(): bool =
-  let s = measureTerm()
-  if s.w != gLastW or s.h != gLastH:
-    gLastW = s.w
-    gLastH = s.h
-    return true
-  false

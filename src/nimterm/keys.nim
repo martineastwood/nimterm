@@ -3,7 +3,7 @@
 type
   Key* = enum
     keyNone
-    keyChar       ## printable; see InputEvent.ch
+    keyChar       ## printable; see UiEvent.text
     keyEscape
     keyEnter
     keyBackspace

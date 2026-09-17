@@ -14,32 +14,6 @@ type
     buffer: string
     escapeStartedMs: int64
 
-  MouseKind* = enum
-    mouseNone
-    mousePress    ## left button down
-    mouseRelease  ## left button up
-    mouseDrag     ## motion while left button held
-
-  FocusKind* = enum
-    focusNone
-    focusIn
-    focusOut
-
-  InputEvent* = object
-    key*: Key
-    ch*: char           ## ASCII keyChar; prefer `text` for insert
-    text*: string       ## UTF-8 rune or a whole paste
-    scrollDelta*: int   ## +N scroll up (older), -N scroll down (newer)
-    resized*: bool
-    mouse*: MouseKind
-    button*: UiMouseButton
-    shift*: bool
-    alt*: bool
-    ctrl*: bool
-    mouseX*: int        ## 0-based column
-    mouseY*: int        ## 0-based row
-    focus*: FocusKind
-
 proc normalizePasteText*(s: string): string =
   ## CR LF / CR → LF so a paste never submits.
   result = newStringOfCap(s.len)
@@ -68,13 +42,9 @@ proc readUtf8Text(first: int, readNext: ByteReader): string =
     if b < 0: return
     result.add char(b)
 
-proc charEvent(s: string): InputEvent =
-  result.key = keyChar
-  result.text = s
-  if s.len == 1:
-    result.ch = s[0]
+proc charEvent(s: string): UiEvent = UiEvent(kind: uiKey, key: keyChar, text: s)
 
-proc parseSgrMouse(params: string, press: bool): InputEvent =
+proc parseSgrMouse(params: string, press: bool): UiEvent =
   ## SGR mouse: ESC [ < btn ; x ; y M/m  (coords are 1-based).
   let parts = params.split(';')
   if parts.len < 3:
@@ -86,18 +56,17 @@ proc parseSgrMouse(params: string, press: bool): InputEvent =
     y = parseInt(parts[2])
   except ValueError:
     return
-  result.mouseX = max(0, x - 1)
-  result.mouseY = max(0, y - 1)
+  result.kind = uiMouse
+  result.x = max(0, x - 1)
+  result.y = max(0, y - 1)
   result.shift = (btn and 4) != 0
   result.alt = (btn and 8) != 0
   result.ctrl = (btn and 16) != 0
 
   # Wheel: bit 6 set. Low bit selects direction (0=up, 1=down).
   if (btn and 64) != 0:
-    if (btn and 1) != 0:
-      result.scrollDelta = -3
-    else:
-      result.scrollDelta = 3
+    result.mouse = umScroll
+    result.scrollDelta = if (btn and 1) != 0: -3 else: 3
     return
 
   let button = btn and 3
@@ -108,11 +77,11 @@ proc parseSgrMouse(params: string, press: bool): InputEvent =
     else: umbNone
 
   if not press:
-    result.mouse = mouseRelease
+    result.mouse = umRelease
   elif (btn and 32) != 0:
-    result.mouse = mouseDrag
+    result.mouse = umDrag
   else:
-    result.mouse = mousePress
+    result.mouse = umPress
 
 proc ctrlKey(b: int): Key =
   case b
@@ -179,7 +148,7 @@ proc modifiedCtrlO(seq: string): bool =
   let (code, mods) = modifiedKey(seq)
   code == ord('o') and ((mods - 1) and 4) != 0
 
-proc readBracketedPaste(readNext: ByteReader): InputEvent =
+proc readBracketedPaste(readNext: ByteReader): UiEvent =
   ## Bytes between ESC [ 200 ~ and ESC [ 201 ~.
   var acc = ""
   while true:
@@ -204,15 +173,15 @@ proc readBracketedPaste(readNext: ByteReader): InputEvent =
   let text = normalizePasteText(acc)
   # Cmd+V of an image often arrives as an empty bracketed paste.
   if text.strip.len == 0:
-    result.key = keyCtrlV
+    result = UiEvent(kind: uiKey, key: keyCtrlV)
     return
   result = charEvent(text)
 
-proc readEscapeSequence(readNext: ByteReader): InputEvent =
+proc readEscapeSequence(readNext: ByteReader): UiEvent =
   ## Called after ESC has already been consumed.
   let ch2 = readNext(50)
   if ch2 < 0:
-    result.key = keyEscape
+    result = UiEvent(kind: uiKey, key: keyEscape)
     return
   # Option/Alt+Enter (common on macOS): ESC then CR/LF → follow-up.
   if ch2 == ord('\r') or ch2 == ord('\n'):
@@ -251,10 +220,10 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
   let ch3 = readNext(50)
   if ch3 < 0: return
   if ch3 == ord('I'):
-    result.focus = focusIn
+    result = UiEvent(kind: uiFocus, focused: true)
     return
   if ch3 == ord('O'):
-    result.focus = focusOut
+    result = UiEvent(kind: uiFocus)
     return
   # SGR mouse: ESC [ < btn ; x ; y M/m
   if ch3 == ord('<'):
@@ -323,7 +292,7 @@ proc readEscapeSequence(readNext: ByteReader): InputEvent =
     elif seq in ["1;3D", "1;5D"]: result.key = keyAltB
     elif seq in ["1;3C", "1;5C"]: result.key = keyAltF
 
-proc decodeInput*(b: int, readNext: ByteReader): InputEvent =
+proc decodeRaw(b: int, readNext: ByteReader): UiEvent =
   if b < 0:
     result.key = keyNone
     return
@@ -349,6 +318,10 @@ proc decodeInput*(b: int, readNext: ByteReader): InputEvent =
     return charEvent(readUtf8Text(b, readNext))
   result.key = keyNone
 
+proc decodeInput*(b: int, readNext: ByteReader): UiEvent =
+  result = decodeRaw(b, readNext)
+  if result.key != keyNone: result.kind = uiKey
+
 proc feed*(decoder: var InputDecoder, bytes: string) =
   decoder.buffer.add bytes
 
@@ -359,6 +332,15 @@ proc escapeWaitMs*(decoder: InputDecoder, nowMs: int64,
   if decoder.buffer.len == 0 or decoder.buffer[0] != '\e': return -1
   if decoder.escapeStartedMs <= 0: return timeoutMs
   max(0, timeoutMs - int(nowMs - decoder.escapeStartedMs))
+
+proc waitForInput*(decoder: InputDecoder, nowMs: int64, timeoutMs: int): int =
+  ## Cap a caller's wait so a pending ESC sequence resolves before its deadline.
+  let escapeWait = decoder.escapeWaitMs(nowMs)
+  if escapeWait < 0: timeoutMs
+  elif timeoutMs < 0: escapeWait
+  else: min(timeoutMs, escapeWait)
+
+proc noEvent*(input: UiEvent): bool = input.kind == uiNone
 
 proc sequenceLength(decoder: var InputDecoder, nowMs: int64,
                     escapeTimeoutMs: int): int =
@@ -384,9 +366,9 @@ proc sequenceLength(decoder: var InputDecoder, nowMs: int64,
   if nowMs - decoder.escapeStartedMs >= escapeTimeoutMs: return 1
 
 proc nextEvent*(decoder: var InputDecoder, nowMs: int64,
-                escapeTimeoutMs = 15): InputEvent =
+                escapeTimeoutMs = 15): UiEvent =
   let length = decoder.sequenceLength(nowMs, escapeTimeoutMs)
-  if length == 0: return InputEvent(key: keyNone)
+  if length == 0: return UiEvent(kind: uiNone)
   let bytes = decoder.buffer[0 ..< length]
   decoder.buffer.delete(0 ..< length)
   decoder.escapeStartedMs = 0
@@ -397,20 +379,3 @@ proc nextEvent*(decoder: var InputDecoder, nowMs: int64,
     result = bytes[index].ord
     inc index
   decodeInput(bytes[0].ord, nextByte)
-
-proc toUiEvent*(input: InputEvent, width = 0, height = 0): UiEvent =
-  if input.resized:
-    return UiEvent(kind: uiResize, width: width, height: height)
-  if input.focus != focusNone:
-    return UiEvent(kind: uiFocus, focused: input.focus == focusIn)
-  if input.mouse != mouseNone or input.scrollDelta != 0:
-    return UiEvent(kind: uiMouse, x: input.mouseX, y: input.mouseY,
-      mouse: case input.mouse
-        of mousePress: umPress
-        of mouseRelease: umRelease
-        of mouseDrag: umDrag
-        of mouseNone: umScroll,
-      scrollDelta: input.scrollDelta, button: input.button,
-      shift: input.shift, alt: input.alt, ctrl: input.ctrl)
-  if input.key != keyNone:
-    return UiEvent(kind: uiKey, key: input.key, text: input.text)

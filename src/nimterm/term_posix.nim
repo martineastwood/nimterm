@@ -1,46 +1,19 @@
 ## POSIX terminal control for nimterm.
 
-import std/[base64, os, posix, strutils, terminal]
-when defined(macosx):
-  import std/osproc
+import std/[base64, osproc, terminal]
+import posix
 import posix/termios
 import ./backend
+import ./term_common
+
+export term_common
 
 type
   TermError* = object of CatchableError
 
 var
-  gTermActive = false
-  gLastW, gLastH: int
   gOldTermios: Termios
   gRawTermios: Termios
-  gCapabilities: TerminalCapabilities
-  gFullscreen: bool
-
-proc measureTerm(): tuple[w, h: int] =
-  try:
-    result.w = terminalWidth()
-  except CatchableError:
-    result.w = 80
-  try:
-    result.h = terminalHeight()
-  except CatchableError:
-    result.h = 24
-  if result.w <= 0: result.w = 80
-  if result.h <= 0: result.h = 24
-
-proc termWidth*(): int =
-  if gLastW <= 0:
-    let s = measureTerm()
-    gLastW = s.w
-    gLastH = s.h
-  gLastW
-
-proc termHeight*(): int =
-  if gLastH <= 0: discard termWidth()
-  gLastH
-
-proc termWrite(s: string) = stdout.write(s)
 
 proc copyToClipboard*(text: string) =
   if not gTermActive: return
@@ -48,50 +21,6 @@ proc copyToClipboard*(text: string) =
   stdout.flushFile()
   when defined(macosx):
     discard execCmdEx("pbcopy", input = text)
-
-proc hideCursor() = termWrite("\e[?25l")
-proc showCursor() = termWrite("\e[?25h")
-proc clearScreen() = termWrite("\e[2J\e[H")
-
-proc enableMouse(): string = "\e[?1000h\e[?1002h\e[?1006h"
-proc disableMouse(): string = "\e[?1006l\e[?1002l\e[?1000l\e[?1007l"
-
-proc enableModifyOtherKeys(): string =
-  result = "\e[>4;2m"
-  result.add "\e[?1036h"
-
-proc enableKittyKeyboard(): string = "\e[>1u"
-proc disableModifyOtherKeys(): string = "\e[>4;0m\e[?1036l"
-proc disableKittyKeyboard(): string = "\e[<u"
-proc enableBracketedPaste(): string = "\e[?2004h"
-proc disableBracketedPaste(): string = "\e[?2004l"
-
-proc enableProtocols*(caps: TerminalCapabilities): string =
-  if caps.mouse: result.add enableMouse()
-  if caps.focusEvents: result.add "\e[?1004h"
-  if caps.kittyKeyboard: result.add enableKittyKeyboard()
-  elif caps.modifyOtherKeys: result.add enableModifyOtherKeys()
-  if caps.bracketedPaste: result.add enableBracketedPaste()
-
-proc disableProtocols*(caps: TerminalCapabilities): string =
-  if caps.bracketedPaste: result.add disableBracketedPaste()
-  if caps.kittyKeyboard: result.add disableKittyKeyboard()
-  elif caps.modifyOtherKeys: result.add disableModifyOtherKeys()
-  if caps.focusEvents: result.add "\e[?1004l"
-  if caps.mouse: result.add disableMouse()
-
-proc useAltScreen(): bool =
-  let t = getEnv("TERM")
-  t.len == 0 or "xterm" in t or "screen" in t or "tmux" in t or
-    "alacritty" in t or "kitty" in t or "rxvt" in t or "vt100" in t
-
-proc enterAltScreen() =
-  if useAltScreen(): termWrite("\e[?1049h")
-  else: clearScreen()
-
-proc leaveAltScreen() =
-  if useAltScreen(): termWrite("\e[?1049l")
-  else: clearScreen()
 
 proc termShutdown*()
 
@@ -110,19 +39,8 @@ proc termInit*(capabilities = defaultCapabilities(), fullscreen = true) =
   gRawTermios.c_cc[VTIME] = 0.char
   if tcSetAttr(STDIN_FILENO, TCSANOW, gRawTermios.addr) != 0:
     raise newException(TermError, "tcsetattr failed")
-  gCapabilities = capabilities
-  gFullscreen = fullscreen
-  gTermActive = true
   try:
-    gLastW = termWidth()
-    gLastH = termHeight()
-    if fullscreen: enterAltScreen()
-    else: termWrite("\n".repeat(gLastH) & "\e[H")
-    termWrite("\e[?6l\e[r")
-    if fullscreen: clearScreen()
-    hideCursor()
-    termWrite(enableProtocols(capabilities))
-    stdout.flushFile()
+    termEnterScreen(capabilities, fullscreen)
   except CatchableError:
     termShutdown()
     raise
@@ -130,16 +48,11 @@ proc termInit*(capabilities = defaultCapabilities(), fullscreen = true) =
 proc termShutdown*() =
   if not gTermActive: return
   try:
-    termWrite(disableProtocols(gCapabilities))
-    showCursor()
-    if gFullscreen: leaveAltScreen()
-    else: termWrite("\e[999B\r\n")
-    stdout.flushFile()
+    termLeaveScreen()
   finally:
     discard tcSetAttr(STDIN_FILENO, TCSANOW, gOldTermios.addr)
     gTermActive = false
 
-proc terminalActive*(): bool = gTermActive
 proc suspendTerminal*() = termShutdown()
 proc resumeTerminal*() =
   if not gTermActive: termInit(gCapabilities, gFullscreen)
@@ -167,14 +80,6 @@ proc readAvailable*(): string =
     let value = readByte()
     if value < 0: break
     result.add char(value)
-
-proc consumeResize*(): bool =
-  let s = measureTerm()
-  if s.w != gLastW or s.h != gLastH:
-    gLastW = s.w
-    gLastH = s.h
-    return true
-  false
 
 proc terminalInputIsInteractive*(): bool = stdin.isatty
 proc terminalOutputIsInteractive*(): bool = stdout.isatty

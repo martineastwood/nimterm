@@ -4,7 +4,6 @@ from std/unicode import Rune, fastRuneAt, toUTF8
 import ./geometry
 import ./style
 import ./ansi
-import ./theme
 import ./text_width
 
 type
@@ -53,6 +52,20 @@ proc copy*(canvas: Canvas): Canvas =
   result.cells = newSeq[Cell](canvas.cells.len)
   for i, cell in canvas.cells: result.cells[i] = cell
 
+proc putRune(canvas: var Canvas, x, y: int, rune: Rune, style: Style,
+             col: var int, maxWidth: int) =
+  let width = rune.cellWidth
+  if width == 0:
+    if col > x:
+      var cell = canvas.getCell(col - 1, y)
+      cell.combining.add rune.toUTF8
+      canvas.setCell(col - 1, y, cell)
+  elif col - x + width <= maxWidth:
+    canvas.setCell(col, y, Cell(glyph: rune, style: style))
+    if width == 2: canvas.setCell(col + 1, y,
+      Cell(glyph: Rune(32), style: style, continuation: true))
+    col += width
+
 proc writeText*(canvas: var Canvas, x, y: int, text: string,
                 style = defaultStyle(), maxWidth = int.high) =
   var col = x
@@ -62,17 +75,7 @@ proc writeText*(canvas: var Canvas, x, y: int, text: string,
     fastRuneAt(text, i, rune)
     if rune.int == 10:
       break
-    let width = rune.cellWidth
-    if width == 0:
-      if col > x:
-        var cell = canvas.getCell(col - 1, y)
-        cell.combining.add rune.toUTF8
-        canvas.setCell(col - 1, y, cell)
-    elif col - x + width <= maxWidth:
-      canvas.setCell(col, y, Cell(glyph: rune, style: style))
-      if width == 2: canvas.setCell(col + 1, y,
-        Cell(glyph: Rune(32), style: style, continuation: true))
-      col += width
+    canvas.putRune(x, y, rune, style, col, maxWidth)
 
 proc writeAnsiText*(canvas: var Canvas, x, y: int, text: string,
                     baseStyle = defaultStyle(), maxWidth = int.high) =
@@ -88,26 +91,11 @@ proc writeAnsiText*(canvas: var Canvas, x, y: int, text: string,
         if code == "\e[0m" or code == "\e[m":
           active = baseStyle
         else:
-          let overlay = styleFromSgr(code)
-          if overlay.foreground.kind != colorDefault:
-            active.foreground = overlay.foreground
-          if overlay.background.kind != colorDefault:
-            active.background = overlay.background
-          active.attributes = active.attributes + overlay.attributes
+          active = active.overlay(styleFromSgr(code))
         continue
     var rune: Rune
     fastRuneAt(text, i, rune)
-    let width = rune.cellWidth
-    if width == 0:
-      if col > x:
-        var cell = canvas.getCell(col - 1, y)
-        cell.combining.add rune.toUTF8
-        canvas.setCell(col - 1, y, cell)
-    elif col - x + width <= maxWidth:
-      canvas.setCell(col, y, Cell(glyph: rune, style: active))
-      if width == 2: canvas.setCell(col + 1, y,
-        Cell(glyph: Rune(32), style: active, continuation: true))
-      col += width
+    canvas.putRune(x, y, rune, active, col, maxWidth)
 
 proc lineText*(canvas: Canvas, y: int): string =
   if y < 0 or y >= canvas.size.h:

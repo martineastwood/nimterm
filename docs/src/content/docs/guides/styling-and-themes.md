@@ -1,6 +1,6 @@
 ---
 title: Styling and themes
-description: Style terminal cells and load color palettes for different terminals.
+description: Style terminal cells and compile color palettes for different terminals.
 ---
 
 nimterm keeps styles semantic until the backend presents a frame. You can use
@@ -34,17 +34,16 @@ Available attributes are `attrBold`, `attrDim`, `attrItalic`, `attrUnderline`,
 
 ## Use the built-in themes
 
-Themes expose named color tokens as both ANSI strings and semantic styles:
+Themes expose named semantic styles:
 
 ```nim
 import nimterm
 
-let error = applyTheme("light", detectDepth())
-if error.len > 0:
-  quit(error)
+let compiled = compileBuiltinTheme("light", detectDepth())
+if not compiled.ok: quit("unknown theme")
+setTheme(compiled.theme)
 
-let heading = currentTheme.themedStyle(currentTheme.heading)
-let screen = newText("A light heading", heading)
+let screen = newText("A light heading", currentTheme.heading)
 ```
 
 The built-in names are `dark`, `light`, and `auto`. `auto` chooses light when
@@ -52,82 +51,59 @@ The built-in names are `dark`, `light`, and `auto`. `auto` chooses light when
 
 `detectDepth()` returns `cdNone` for `NO_COLOR` or non-interactive output, then
 selects `cd16`, `cd256`, or `cdTrue` from the terminal environment. Pass an
-explicit depth to `applyTheme` or `compileNamedTheme` when your application
-already knows the target.
+explicit depth to `compileBuiltinTheme` when your application already knows
+the target.
 
 ## Use theme tokens
 
 `currentTheme` includes `accent`, `success`, `error`, `warning`, `code`,
 `muted`, `dim`, `text`, `heading`, `model`, `panelBg`, `selectedBg`, and
-`selectedFg`. Use `paint` for a string or `themedStyle` for a widget:
+`selectedFg`. Use `paint` for console text and styles directly for widgets:
 
 ```nim
 echo currentTheme.paint(currentTheme.success, "Saved")
 
-let selected = currentTheme.themedStyle(
-  currentTheme.selectedFg,
-  currentTheme.selectedBg,
-  {attrBold})
+let selected = currentTheme.selectedFg
+  .overlay(currentTheme.selectedBg)
+  .withAttribute(attrBold)
 let menu = newMenu(@[MenuItem(label: "Saved")], selectedStyle = selected)
 ```
 
 `colorsOn()` tells you whether a compiled theme emits ANSI sequences. When
 colors are off, `paint` returns the input text unchanged.
 
-## Add a custom theme
+## Compile a custom theme
 
-Create a JSON file under either `~/.nimterm/themes/` or
-`<workspace>/.nimterm/themes/`:
-
-```json
-{
-  "name": "seafoam",
-  "colors": {
-    "accent": "#00afaf",
-    "success": "#00af00",
-    "error": "#af0000",
-    "warning": "#afaf00",
-    "code": "#d7af5f",
-    "muted": "242",
-    "dim": "dim",
-    "text": "#c6c6c6",
-    "heading": "#5f87ff",
-    "model": "#af00af",
-    "panelBg": "#303030",
-    "selectedBg": "#5fd7ff",
-    "selectedFg": "#000000"
-  }
-}
-```
-
-Every token is required. Values can be `#rrggbb`, an ANSI 256 index from
-`0` through `255`, or `"dim"` for the dim attribute. Theme names cannot
-contain `/`.
-
-Workspace themes override global themes with the same name. Use custom roots
-when your application stores its configuration elsewhere:
+Define a `ThemeSpec`, compile it for the terminal, and install it:
 
 ```nim
-import std/os
 import nimterm
 
-let names = listThemeNames(
-  workspace = getCurrentDir(),
-  appDir = ".my-app",
-  globalDir = getHomeDir() / ".my-app")
-let error = applyTheme(
-  "seafoam",
-  workspace = getCurrentDir(),
-  appDir = ".my-app",
-  globalDir = getHomeDir() / ".my-app")
+let spec = ThemeSpec(
+  name: "seafoam",
+  accent: "#00afaf",
+  success: "#00af00",
+  error: "#af0000",
+  warning: "#afaf00",
+  code: "#d7af5f",
+  muted: "242",
+  dim: "dim",
+  text: "#c6c6c6",
+  heading: "#5f87ff",
+  model: "#af00af",
+  panelBg: "#303030",
+  selectedBg: "#5fd7ff",
+  selectedFg: "#000000")
+
+setTheme(compileTheme(spec, detectDepth()))
 ```
 
-Theme discovery is cached. Call `clearThemeNameCache()` after adding or
-removing files if the same process must see the new list. Themes are not hot
-reloaded during rendering.
+Values can be `#rrggbb`, an ANSI 256 index from `0` through `255`, or `"dim"`
+for the dim attribute. Your application decides where theme specifications
+come from, so `nimterm` does not read configuration files or cache theme names.
 
 ## Next steps
 
-- [Text and Markdown](/guides/text-and-markdown/) for ANSI-aware rendering.
+- [Text and Markdown](/guides/text-and-markdown/) for styled rendering.
 - [Widgets](/guides/widgets/) for passing styles through built-in widgets.
 - [API reference](/reference/api/nimterm/theme/) for all theme procedures.

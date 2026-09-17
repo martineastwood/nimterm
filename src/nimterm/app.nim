@@ -7,7 +7,7 @@ import ./geometry
 import ./keys
 import ./queue
 import ./widget
-import std/[monotimes, os, times]
+import std/[monotimes, times]
 
 type
   EventSource* = ref object of RootObj
@@ -39,15 +39,6 @@ type App* = object
   sources*: seq[EventSource]
   timers: seq[Timer]
   lastPresent: MonoTime
-  perfEnabled: bool
-  perfWindowStart: MonoTime
-  perfFrames: int
-  perfEvents: int
-  perfMeasuredEvents: int
-  perfFrameMicros: int64
-  perfEventMicros: int64
-  perfEventAt: MonoTime
-  perfEventPending: bool
 
 proc newApp*(backend: TerminalBackend, root: Widget = nil): App =
   result.backend = backend
@@ -57,8 +48,6 @@ proc newApp*(backend: TerminalBackend, root: Widget = nil): App =
   result.frame = newCanvas(result.size)
   result.dirty = true
   result.pollIntervalMs = 16
-  result.perfEnabled = getEnv("NIMTERM_PERF") == "1"
-  result.perfWindowStart = getMonoTime()
 
 proc addSource*(app: var App, source: EventSource) =
   if not source.isNil: app.sources.add source
@@ -203,7 +192,6 @@ proc dispatch*(app: var App, event: UiEvent) =
 
 proc render*(app: var App) =
   if app.backend.isNil: return
-  let started = getMonoTime()
   let nextSize = app.backend.size()
   if nextSize != app.size:
     app.size = nextSize
@@ -213,30 +201,8 @@ proc render*(app: var App) =
   if not app.root.isNil:
     app.root.render(app.frame, rect(0, 0, app.size.w, app.size.h))
   app.backend.present(app.frame)
-  let finished = getMonoTime()
-  app.lastPresent = finished
+  app.lastPresent = getMonoTime()
   app.dirty = false
-  if app.perfEnabled:
-    inc app.perfFrames
-    app.perfFrameMicros += (finished - started).inMicroseconds
-    if app.perfEventPending:
-      app.perfEventMicros += (finished - app.perfEventAt).inMicroseconds
-      inc app.perfMeasuredEvents
-      app.perfEventPending = false
-    if (finished - app.perfWindowStart).inMilliseconds >= 1000:
-      let avgFrame = if app.perfFrames == 0: 0 else:
-        app.perfFrameMicros div app.perfFrames
-      let avgEvent = if app.perfMeasuredEvents == 0: 0 else:
-        app.perfEventMicros div app.perfMeasuredEvents
-      stderr.writeLine("nimterm perf: frames=" & $app.perfFrames &
-        " events=" & $app.perfEvents & " frame_us=" & $avgFrame &
-        " event_to_present_us=" & $avgEvent)
-      app.perfWindowStart = finished
-      app.perfFrames = 0
-      app.perfEvents = 0
-      app.perfMeasuredEvents = 0
-      app.perfFrameMicros = 0
-      app.perfEventMicros = 0
 
 proc flush*(app: var App, force = false) =
   if not app.dirty: return
@@ -258,10 +224,6 @@ proc step*(app: var App, timeoutMs = 0): bool =
     if event.kind == uiNone:
       app.collectEvents()
       if not app.queue.tryPop(event): return false
-  if app.perfEnabled:
-    inc app.perfEvents
-    app.perfEventAt = getMonoTime()
-    app.perfEventPending = true
   try:
     app.dispatch(event)
   except CatchableError as error:
@@ -273,8 +235,6 @@ proc step*(app: var App, timeoutMs = 0): bool =
   ## minFrameIntervalMs, but input should never wait for that frame budget.
   app.flush(force = event.kind == uiKey)
   true
-
-proc pump*(app: var App, timeoutMs = 0): bool = app.step(timeoutMs)
 
 proc run*(app: var App) =
   if app.backend.isNil:

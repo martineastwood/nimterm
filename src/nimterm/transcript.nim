@@ -66,12 +66,11 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
         id: id, runId: event.runId, step: event.step, model: event.model,
         revision: 1)
       index = transcript.items.high
-    if index >= 0:
-      transcript.items[index].text.add event.text
-      transcript.items[index].pending = true
-      if event.model.len > 0:
-        transcript.items[index].model = event.model
-      inc transcript.items[index].revision
+    transcript.items[index].text.add event.text
+    transcript.items[index].pending = true
+    if event.model.len > 0:
+      transcript.items[index].model = event.model
+    inc transcript.items[index].revision
   of ueThinkingDelta:
     if event.text.len == 0: return
     let id = event.runId & ":" & $event.step & ":thinking"
@@ -81,10 +80,9 @@ proc apply*(transcript: var Transcript, event: AgentUiEvent) =
         id: id, runId: event.runId, step: event.step, pending: true,
         revision: 1)
       index = transcript.items.high
-    if index >= 0:
-      transcript.items[index].text.add event.text
-      transcript.items[index].pending = true
-      inc transcript.items[index].revision
+    transcript.items[index].text.add event.text
+    transcript.items[index].pending = true
+    inc transcript.items[index].revision
   of ueToolCalled:
     let assistant = transcript.itemIndex(event.runId,
       event.runId & ":" & $event.step & ":assistant")

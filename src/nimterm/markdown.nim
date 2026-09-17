@@ -1,305 +1,143 @@
-## Minimal markdown-to-ANSI renderer.
-##
-## Stateless by design, so callers can re-render accumulated streaming text.
-## Supports the subset that shows up regularly in coding-agent replies:
-## headings, fenced code blocks, inline code, bold, italic, links, lists,
-## blockquotes, horizontal rules, and tables.
+## Small Markdown renderer for terminal text and widgets.
 
-import std/[strutils, sequtils]
-import ./ansi
-import ./text_width
+import std/[sequtils, strutils]
+import ./style
+import ./styled_text
 import ./theme
 
-type
-  RenderState = enum
-    rsNormal
-    rsCodeBlock
-    rsTable
+type RenderState = enum normal, codeBlock, table
 
-proc renderInline(text: string, useColor: bool): string =
-  ## Render inline markdown: `code`, ***bold italic***, **bold**, *italic*, links.
-  result = text
+proc inline(text: string): StyledLine =
   let t = currentTheme
-  let color = useColor and t.colorsOn
-  if not color:
-    var i = 0
-    var acc = ""
-    while i < result.len:
-      if result[i] == '`':
-        let close = result.find('`', i + 1)
-        if close > 0:
-          acc.add result[i + 1 ..< close]
-          i = close + 1
-          continue
-      if i + 2 < result.len and result[i] == '*' and result[i + 1] == '*' and result[i + 2] == '*':
-        let close = result.find("***", i + 3)
-        if close > 0:
-          acc.add result[i + 3 ..< close]
-          i = close + 3
-          continue
-      if i + 1 < result.len and result[i] == '~' and result[i + 1] == '~':
-        let close = result.find("~~", i + 2)
-        if close > 0:
-          if useColor:
-            acc.add "\e[9m" & result[i + 2 ..< close] &
-              (if t.reset.len > 0: t.reset else: "\e[0m")
-          else:
-            acc.add result[i + 2 ..< close]
-          i = close + 2
-          continue
-      if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
-        let close = result.find("**", i + 2)
-        if close > 0:
-          acc.add result[i + 2 ..< close]
-          i = close + 2
-          continue
-      if i + 1 < result.len and result[i] == '*' and result[i + 1] != '*':
-        let close = result.find('*', i + 1)
-        if close > 0:
-          acc.add result[i + 1 ..< close]
-          i = close + 1
-          continue
-      if result[i] == '[':
-        let closeBr = result.find(']', i + 1)
-        if closeBr > 0 and closeBr + 1 < result.len and result[closeBr + 1] == '(':
-          let closeParen = result.find(')', closeBr + 2)
-          if closeParen > 0:
-            let label = result[i + 1 ..< closeBr]
-            let url = result[closeBr + 2 ..< closeParen]
-            acc.add label & " (" & url & ")"
-            i = closeParen + 1
-            continue
-      acc.add result[i]
-      inc i
-    result = acc
-    return
-
-  # Colored rendering — check *** before ** before *.
   var i = 0
-  var acc = ""
-  while i < result.len:
-    if result[i] == '`':
-      let close = result.find('`', i + 1)
-      if close > 0:
-        acc.add t.paint(t.code, result[i + 1 ..< close])
-        i = close + 1
+  while i < text.len:
+    var marker = ""
+    var style = defaultStyle()
+    if text.continuesWith("***", i):
+      marker = "***"; style = style.withAttribute(attrBold).withAttribute(attrItalic)
+    elif text.continuesWith("~~", i):
+      marker = "~~"; style = style.withAttribute(attrStrikethrough)
+    elif text.continuesWith("**", i):
+      marker = "**"; style = style.withAttribute(attrBold)
+    elif text[i] == '*': marker = "*"; style = style.withAttribute(attrItalic)
+    elif text[i] == '`': marker = "`"; style = t.code
+    if marker.len > 0:
+      let close = text.find(marker, i + marker.len)
+      if close >= 0:
+        result.add(text[i + marker.len ..< close], style)
+        i = close + marker.len
         continue
-    if i + 2 < result.len and result[i] == '*' and result[i + 1] == '*' and result[i + 2] == '*':
-      let close = result.find("***", i + 3)
-      if close > 0:
-        acc.add "\e[1;3m" & result[i + 3 ..< close] & t.reset
-        i = close + 3
-        continue
-    if i + 1 < result.len and result[i] == '~' and result[i + 1] == '~':
-      let close = result.find("~~", i + 2)
-      if close > 0:
-        acc.add "\e[9m" & result[i + 2 ..< close] & t.reset
-        i = close + 2
-        continue
-    if i + 1 < result.len and result[i] == '*' and result[i + 1] == '*':
-      let close = result.find("**", i + 2)
-      if close > 0:
-        acc.add "\e[1m" & result[i + 2 ..< close] & t.reset
-        i = close + 2
-        continue
-    if i + 1 < result.len and result[i] == '*' and result[i + 1] != '*':
-      let close = result.find('*', i + 1)
-      if close > 0:
-        acc.add "\e[3m" & result[i + 1 ..< close] & t.reset
-        i = close + 1
-        continue
-    if result[i] == '[':
-      let closeBr = result.find(']', i + 1)
-      if closeBr > 0 and closeBr + 1 < result.len and result[closeBr + 1] == '(':
-        let closeParen = result.find(')', closeBr + 2)
-        if closeParen > 0:
-          let label = result[i + 1 ..< closeBr]
-          let url = result[closeBr + 2 ..< closeParen]
-          acc.add "\e[4m" & label & t.reset & " " & t.paint(t.dim, url)
-          i = closeParen + 1
+    if text[i] == '[':
+      let close = text.find(']', i + 1)
+      if close > i and close + 1 < text.len and text[close + 1] == '(':
+        let finish = text.find(')', close + 2)
+        if finish > close:
+          result.add(text[i + 1 ..< close], style.withAttribute(attrUnderline))
+          result.add(" " & text[close + 2 ..< finish], t.dim)
+          i = finish + 1
           continue
-    acc.add result[i]
+    result.add($text[i])
     inc i
-  result = acc
 
-proc parseTableRow(line: string): seq[string] =
-  ## Split a markdown table row into cells.
-  let trimmed = line.strip
-  var s = trimmed
-  if s.startsWith("|"): s = s[1 .. ^1]
-  if s.endsWith("|"): s = s[0 ..< s.high]
-  for cell in s.split("|"):
-    result.add cell.strip
+proc cells(line: string): seq[string] =
+  var value = line.strip
+  if value.startsWith("|"): value = value[1 .. ^1]
+  if value.endsWith("|"): value = value[0 ..< value.high]
+  for cell in value.split('|'): result.add cell.strip
 
-proc isTableSeparator(line: string): bool =
-  ## Check if a line is a table separator like |---|---|
-  let cells = parseTableRow(line)
-  if cells.len == 0: return false
-  for cell in cells:
+proc tableSeparator(line: string): bool =
+  let values = line.cells
+  if values.len == 0: return false
+  for cell in values:
     if cell.len == 0: return false
     for ch in cell:
-      if ch != '-' and ch != ':' and ch != ' ': return false
+      if ch notin {'-', ':', ' '}: return false
   true
 
-proc renderTable(rows: seq[seq[string]], useColor: bool,
-                 maxWidth: int): seq[string] =
-  ## Render a markdown table with Unicode box-drawing characters.
+proc renderTable(rows: seq[seq[string]], maxWidth: int): seq[StyledLine] =
   if rows.len == 0: return
-  let t = currentTheme
-  let color = useColor and t.colorsOn
-
-  let numCols = rows[0].len
-  # Calculate column widths
-  var colWidths = newSeq[int](numCols)
+  let count = rows[0].len
+  var widths = newSeq[int](count)
   for row in rows:
-    for c, cell in row:
-      if c < numCols:
-        let visible = renderInline(cell, false)
-        colWidths[c] = max(colWidths[c], displayWidth(visible))
-
+    for i in 0 ..< min(count, row.len): widths[i] = max(widths[i], row[i].inline.width)
   if maxWidth > 0:
-    var total = 0
-    for width in colWidths: total += width
-    let available = max(0, maxWidth - (3 * numCols + 1))
+    var total = widths.foldl(a + b, 0)
+    let available = max(0, maxWidth - 3 * count - 1)
     while total > available:
       var widest = 0
-      for i, width in colWidths:
-        if width > colWidths[widest]: widest = i
-      if colWidths[widest] <= 1: break
-      dec colWidths[widest]
-      dec total
-
-  let topBorder = "┌" & colWidths.mapIt("─".repeat(it + 2)).join("┬") & "┐"
-  let midBorder = "├" & colWidths.mapIt("─".repeat(it + 2)).join("┼") & "┤"
-  let botBorder = "└" & colWidths.mapIt("─".repeat(it + 2)).join("┴") & "┘"
-
-  if color:
-    result.add t.paint(t.dim, topBorder)
-  else:
-    result.add topBorder
-
-  for r, row in rows:
-    var cellLines = newSeq[seq[string]](numCols)
-    var rowHeight = 1
-    for c in 0 ..< numCols:
-      let cell = if c < row.len: row[c] else: ""
-      cellLines[c] = wrapAnsi(renderInline(cell, color), max(1, colWidths[c]), true)
-      rowHeight = max(rowHeight, cellLines[c].len)
-    for lineIndex in 0 ..< rowHeight:
-      var line = "│"
-      for c in 0 ..< numCols:
-        let content = if lineIndex < cellLines[c].len: cellLines[c][lineIndex] else: ""
-        let pad = colWidths[c] - ansiVisibleWidth(content)
-        let cellText = " " & content & " ".repeat(max(0, pad)) & " "
-        if r == 0 and color:
-          line.add t.heading & cellText & t.reset & "│"
-        else:
-          line.add cellText & "│"
+      for i in 1 ..< widths.len:
+        if widths[i] > widths[widest]: widest = i
+      if widths[widest] <= 1: break
+      dec widths[widest]; dec total
+  proc border(left, joiner, right: string): StyledLine =
+    result.add(left & widths.mapIt("─".repeat(it + 2)).join(joiner) & right,
+      currentTheme.dim)
+  result.add border("┌", "┬", "┐")
+  for rowIndex, row in rows:
+    var wrapped = newSeq[seq[StyledLine]](count)
+    var height = 1
+    for column in 0 ..< count:
+      let content: StyledLine = if column < row.len: row[column].inline else: @[]
+      wrapped[column] = content.wrap(max(1, widths[column]))
+      height = max(height, wrapped[column].len)
+    for lineIndex in 0 ..< height:
+      var line: StyledLine
+      line.add("│")
+      for column in 0 ..< count:
+        line.add(" ")
+        let content: StyledLine = if lineIndex < wrapped[column].len: wrapped[column][lineIndex] else: @[]
+        let rowStyle = if rowIndex == 0: currentTheme.heading else: defaultStyle()
+        for span in content: line.add(span.text, rowStyle.overlay(span.style))
+        line.add(" ".repeat(max(0, widths[column] - content.width + 1)))
+        line.add("│")
       result.add line
-    if r == 0:
-      if color:
-        result.add t.paint(t.dim, midBorder)
-      else:
-        result.add midBorder
+    if rowIndex == 0: result.add border("├", "┼", "┤")
+  result.add border("└", "┴", "┘")
 
-  if color:
-    result.add t.paint(t.dim, botBorder)
-  else:
-    result.add botBorder
+proc renderMarkdownLines*(text: string, maxWidth = 0): seq[StyledLine] =
+  let lines = text.splitLines
+  var state = normal
+  var code: seq[string]
+  var rows: seq[seq[string]]
+  for i, source in lines:
+    case state
+    of normal:
+      if source.startsWith("```"): state = codeBlock; code = @[]
+      elif source.strip.contains("|") and i + 1 < lines.len and lines[i + 1].tableSeparator:
+        state = table; rows = @[source.cells]
+      elif source.strip in ["---", "***"]:
+        var line: StyledLine; line.add("─".repeat(40), currentTheme.dim); result.add line
+      else:
+        var line: StyledLine
+        if source.startsWith("### "): line = source[4 .. ^1].strip.inline
+        elif source.startsWith("## "): line = source[3 .. ^1].strip.inline
+        elif source.startsWith("# "): line = source[2 .. ^1].strip.inline
+        elif source.startsWith("> "): line.add("│ ", currentTheme.dim); line.add(source[2 .. ^1])
+        elif source.len >= 2 and source[0] in {'-', '*'} and source[1] == ' ':
+          line.add("• "); for span in source[2 .. ^1].inline: line.add(span.text, span.style)
+        elif source.len >= 3 and source[0].isDigit and source[1] == '.' and source[2] == ' ':
+          line.add(source[0 .. 2]); for span in source[3 .. ^1].inline: line.add(span.text, span.style)
+        else: line = source.inline
+        if source.startsWith("#"):
+          for span in line.mitems: span.style = currentTheme.heading.overlay(span.style)
+        result.add line
+    of codeBlock:
+      if source.startsWith("```"):
+        for value in code:
+          var line: StyledLine; line.add(value, currentTheme.dim); result.add line
+        state = normal
+      else: code.add source
+    of table:
+      if source.strip.contains("|"):
+        if not (rows.len == 1 and source.tableSeparator): rows.add source.cells
+      else:
+        result.add renderTable(rows, maxWidth)
+        rows = @[]; state = normal
+        if source.len > 0: result.add source.inline
+  if state == codeBlock:
+    for value in code:
+      var line: StyledLine; line.add(value, currentTheme.dim); result.add line
+  elif state == table: result.add renderTable(rows, maxWidth)
 
 proc renderMarkdown*(text: string, useColor: bool, maxWidth = 0): string =
-  ## Render a markdown response to a string with optional ANSI colors.
-  let t = currentTheme
-  let color = useColor and t.colorsOn
-  var lines = text.splitLines
-  var rendered: seq[string] = @[]
-  var state = rsNormal
-  var codeLines: seq[string] = @[]
-  var codeLang = ""
-  var tableRows: seq[seq[string]]
-
-  for i, line in lines:
-    case state
-    of rsNormal:
-      if line.startsWith("```"):
-        state = rsCodeBlock
-        codeLang = line[3 .. ^1].strip
-        codeLines = @[]
-        continue
-      # Detect a table only once its header separator has arrived.
-      if line.strip.contains("|") and i + 1 < lines.len and
-          isTableSeparator(lines[i + 1]):
-        state = rsTable
-        tableRows = @[parseTableRow(line)]
-        continue
-      if line.strip == "---" or line.strip == "***":
-        if color:
-          rendered.add t.paint(t.dim, "─".repeat(40))
-        else:
-          rendered.add "─".repeat(40)
-        continue
-      if line.startsWith("# "):
-        let body = renderInline(line[2 .. ^1].strip, color)
-        rendered.add (if color: t.paint(t.heading, body) else: body)
-      elif line.startsWith("## "):
-        let body = renderInline(line[3 .. ^1].strip, color)
-        rendered.add (if color: t.paint(t.heading, body) else: body)
-      elif line.startsWith("### "):
-        let body = renderInline(line[4 .. ^1].strip, color)
-        rendered.add (if color: t.paint(t.heading, body) else: body)
-      elif line.startsWith("> "):
-        let body = renderInline(line[2 .. ^1], color)
-        rendered.add (if color: t.paint(t.dim, "│ " & body) else: "│ " & body)
-      elif line.len >= 2 and line[0] in {'-', '*'} and line[1] == ' ':
-        let body = renderInline(line[2 .. ^1], color)
-        rendered.add "• " & body
-      elif line.len >= 3 and line[0].isDigit and line[1] == '.' and line[2] == ' ':
-        let dot = line.find(". ")
-        let num = line[0 ..< dot]
-        let body = renderInline(line[dot + 2 .. ^1], color)
-        rendered.add num & ". " & body
-      else:
-        rendered.add renderInline(line, color)
-    of rsCodeBlock:
-      if line.startsWith("```"):
-        if color:
-          for codeLine in codeLines:
-            rendered.add t.paint(t.dim, codeLine)
-        else:
-          rendered.add codeLines
-        state = rsNormal
-        codeLines = @[]
-        codeLang = ""
-      else:
-        codeLines.add line
-    of rsTable:
-      if line.strip.contains("|"):
-        if not (tableRows.len == 1 and isTableSeparator(line)):
-          tableRows.add parseTableRow(line)
-      else:
-        # Table ended — render it
-        rendered.add renderTable(tableRows, color, maxWidth)
-        tableRows = @[]
-        state = rsNormal
-        # Re-process this line in normal mode
-        if line.strip.len > 0:
-          if line.startsWith("```"):
-            state = rsCodeBlock
-            codeLang = line[3 .. ^1].strip
-            codeLines = @[]
-          else:
-            rendered.add renderInline(line, color)
-
-  # Unterminated code block
-  if state == rsCodeBlock and codeLines.len > 0:
-    if color:
-      for codeLine in codeLines:
-        rendered.add t.paint(t.dim, codeLine)
-    else:
-      rendered.add codeLines
-
-  # Unterminated table
-  if state == rsTable and tableRows.len > 0:
-    rendered.add renderTable(tableRows, color, maxWidth)
-
-  result = rendered.join("\n")
+  renderMarkdownLines(text, maxWidth).mapIt(it.ansi(useColor and currentTheme.colorsOn)).join("\n")

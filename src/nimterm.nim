@@ -1,7 +1,7 @@
 ## Terminal UI primitives for Nim applications.
 
 import nimterm/[ansi, app, backend, canvas, events, geometry, input, keys,
-  markdown, queue, style, text_width, theme, transcript, widget, widgets]
+  markdown, queue, style, styled_text, text_width, theme, transcript, widget, widgets]
 
 when not defined(windows):
   import nimterm/platform_posix
@@ -11,4 +11,4 @@ else:
   export platform_windows
 
 export ansi, app, backend, canvas, events, geometry, input, keys, markdown,
-  queue, style, text_width, theme, transcript, widget, widgets
+  queue, style, styled_text, text_width, theme, transcript, widget, widgets

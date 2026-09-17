@@ -33,7 +33,8 @@ proc stripAnsi*(s: string): string =
     inc i
 
 proc ansiVisibleWidth*(s: string): int =
-  ## Terminal columns ≈ rune count, ignoring ANSI escapes.
+  ## Terminal columns of `s`, ignoring ANSI escapes and counting wide runes
+  ## as two columns.
   var i = 0
   while i < s.len:
     if skipAnsi(s, i):

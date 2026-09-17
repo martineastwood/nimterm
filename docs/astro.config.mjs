@@ -8,7 +8,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'nimterm',
-			description: 'Build terminal and console apps for agents in Nim: cells, layout, agent-shaped widgets, Markdown, and lifecycle events.',
+			description: 'A terminal UI library designed for building agents in Nim, with streamed transcripts, tool calls, approvals, prompts, and a testable canvas.',
 			favicon: '/favicon.ico',
 			head: [
 				{ tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '48x48' } },
@@ -16,7 +16,7 @@ export default defineConfig({
 				{ tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/favicon-16x16.png' } },
 				{ tag: 'link', attrs: { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' } },
 			],
-			customCss: ['./src/styles/sidebar.css'],
+			customCss: ['./src/styles/sidebar.css', './src/styles/landing.css'],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/martineastwood/nimterm' }],
 			sidebar: [
 				{ label: 'Introduction', slug: 'introduction' },

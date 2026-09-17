@@ -9,13 +9,15 @@ marks, and semantic cell styles.
 
 ## Measure and wrap text
 
-Use `displayWidth` for plain text and `ansiVisibleWidth` for text that may
-contain ANSI escapes:
+Use `displayWidth` for plain text, `cellWidth` for a single rune, and
+`ansiVisibleWidth` for text that may contain ANSI escapes:
 
 ```nim
 import nimterm
+from std/unicode import Rune
 
 assert displayWidth("界") == 2
+assert Rune(0x754C).cellWidth == 2
 assert ansiVisibleWidth("\e[31mred\e[0m") == 3
 
 let lines = wrapAnsi("\e[36mA long label\e[0m", 8, preferSpaces = true)
@@ -56,16 +58,47 @@ canvas.writeAnsiText(0, 0, "\e[1;36mConnected\e[0m", base, 20)
 canvas as newline-separated rows. These helpers are especially useful in
 tests.
 
+## Build styled lines
+
+`StyledLine` groups text spans with semantic styles. Use it when you need to
+measure, wrap, or paint multi-style output without going through a widget:
+
+```nim
+import nimterm
+import nimterm/styled_text
+
+var line: StyledLine
+line.add("Status: ", defaultStyle())
+line.add("ready", currentTheme.success)
+
+assert line.width == 13
+var canvas = newCanvas(size(20, 1))
+canvas.write(line, 0, 0, 20)
+for wrapped in line.wrap(12):
+  echo wrapped.ansi()
+```
+
+`add` merges adjacent spans that share the same style. `ansi` turns a line into
+terminal output, and `write` paints it into a canvas with optional width
+clipping.
+
 ## Render Markdown
 
 `renderMarkdown` returns a string that can be printed directly or written into
-a canvas:
+a canvas. `renderMarkdownLines` returns the same content as `seq[StyledLine]`
+when you want to wrap or paint each line yourself:
 
 ```nim
 let output = renderMarkdown(
   "## Result\n\n**Done** in `nimterm`.",
   useColor = true)
 canvas.writeAnsiText(0, 0, output, defaultStyle(), 20)
+
+var row = 0
+for line in renderMarkdownLines("## Result\n\n**Done**"):
+  for wrapped in line.wrap(40):
+    canvas.write(wrapped, 0, row, 40)
+    inc row
 ```
 
 The renderer supports the Markdown commonly used in terminal responses:

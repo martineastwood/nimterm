@@ -81,7 +81,16 @@ Useful editing keys include:
 | Enter | Emit `submit` |
 
 `setText` replaces the text and moves the cursor to the end. `clear` removes
-the text and resets the edit history.
+the text and resets the edit history. `insert`, `undo`, and `yank` are also
+available when you drive the widget from application code.
+
+Listen for `change` in `onAction` when you want live updates before submit:
+
+```nim
+app.onAction = proc (app: var App, action: UiAction) =
+  if action.kind == "change":
+    echo "draft: " & action.value
+```
 
 ## Work with actions
 

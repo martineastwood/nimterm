@@ -34,6 +34,7 @@ your application needs more control. See [Application loop](/guides/application-
 | `style` | `defaultStyle`, `ansi16`, `ansi256`, `rgb`, `withForeground`, `withBackground` |
 | `text_width` | `cellWidth`, `displayWidth` |
 | `ansi` | `stripAnsi`, `ansiVisibleWidth`, `wrapAnsi` |
+| `styled_text` | `StyledLine`, `add`, `width`, `ansi`, `write`, `wrap` |
 
 ## Widgets
 
@@ -68,7 +69,10 @@ should let `App` manage the terminal lifecycle.
 
 `Transcript` reduces `AgentUiEvent` values into retained items. `TranscriptWidget`
 adds Markdown rendering, scrolling, compact tool and thinking views, selection,
-copy actions, and search. See [Agent frontends](/guides/agent-frontends/).
+copy actions, and search. Common widget procedures are `apply`, `appendUser`,
+`appendStatus`, `awaitingApproval`, `selectedText`, `setSearch`, `nextSearch`,
+`clearSearch`, `copySelection`, and `scrollBy`. See
+[Agent frontends](/guides/agent-frontends/).
 
 ## Generated API reference
 

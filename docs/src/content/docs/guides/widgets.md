@@ -45,8 +45,8 @@ or compose the containers below.
 | `TranscriptWidget` | Streamed agent or model turns | `newTranscriptWidget` |
 
 `ScrollView` is a state object rather than a widget. Use it when a custom
-widget needs a vertical viewport, or use the built-in scrolling behavior in a
-transcript.
+widget needs a vertical viewport, or rely on the built-in scrolling behavior in
+a transcript.
 
 ## Compose areas
 
@@ -85,9 +85,84 @@ app.onAction = proc (app: var App, action: UiAction) =
 app.run()
 ```
 
-The common fields are `sourceId`, `kind`, `value`, `index`, and `cancelled`.
-`QuestionWidget` uses `index == -1` for a free-text answer. A menu selection
-uses a zero-based index.
+The common fields are `sourceId`, `targetId`, `kind`, `value`, `index`, and
+`cancelled`. `sourceId` identifies the widget that emitted the action.
+`targetId` identifies a related item, such as a tool call in an approval
+action. `QuestionWidget` uses `index == -1` for a free-text answer. A menu
+selection uses a zero-based index.
+
+## Show a diff
+
+`DiffCard` renders a `DiffDocument` with added, removed, context, and header
+lines:
+
+```nim
+let diff = newDiffCard(DiffDocument(
+  path: "src/parser.nim",
+  lines: @[
+    DiffLine(kind: dlHeader, text: "@@ -1,3 +1,4 @@"),
+    DiffLine(kind: dlRemoved, text: "old line"),
+    DiffLine(kind: dlAdded, text: "new line")],
+  additions: 1,
+  removals: 1))
+```
+
+Pass independent styles for each line kind through `newDiffCard`. The card
+measures itself from the document path and line text.
+
+## Configure menus and inputs
+
+`newMenu` accepts a title, border, and per-state styles. Menus scroll when
+there are more items than visible rows, support Page Up and Page Down, and
+respond to mouse clicks on a row:
+
+```nim
+let menu = newMenu(@[
+  MenuItem(label: "Continue", description: "Keep working"),
+  MenuItem(label: "Quit", description: "Close the app")],
+  title = "Session",
+  bordered = true)
+```
+
+`newInput` supports a continuation prefix for wrapped multiline text, padding,
+and separate prefix and cursor styles. It emits a `change` action after each
+edit and `submit` on Enter:
+
+```nim
+let input = newInput(
+  prefix = "> ",
+  continuationPrefix = "  ",
+  paddingLeft = 1)
+```
+
+Up and Down move between wrapped visual lines when the text spans multiple
+rows.
+
+## Scroll with `ScrollView`
+
+Use `ScrollView` in custom widgets that paint more lines than fit in the
+viewport:
+
+```nim
+var view = newScrollView(followTail = true)
+view.update(contentHeight = 120, viewportHeight = 20)
+view.pageBy(1)
+view.home()
+view.tail()
+let visible = view.visibleRange()
+```
+
+`followTail` keeps the viewport pinned to the end while new content arrives.
+`scrollBy` and `pageBy` clear tail-following when the user scrolls away from
+the bottom.
+
+## Control visibility and modality
+
+Override `visible`, `enabled`, `focusable`, and `modal` on custom widgets to
+change how events reach them. A modal widget blocks background keyboard input
+until it is resolved. Override `allowsBackgroundEvent` when a modal widget should
+still receive scroll or page keys, as `QuestionWidget` does for background
+scrolling.
 
 ## Use layout constraints
 

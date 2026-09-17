@@ -56,9 +56,10 @@ the target.
 
 ## Use theme tokens
 
-`currentTheme` includes `accent`, `success`, `error`, `warning`, `code`,
-`muted`, `dim`, `text`, `heading`, `model`, `panelBg`, `selectedBg`, and
-`selectedFg`. Use `paint` for console text and styles directly for widgets:
+`currentTheme` includes `accent`, `boldAccent`, `success`, `error`, `boldError`,
+`warning`, `code`, `muted`, `dim`, `text`, `heading`, `model`, `panelBg`,
+`selectedBg`, and `selectedFg`. Use `paint` for console text and styles
+directly for widgets:
 
 ```nim
 echo currentTheme.paint(currentTheme.success, "Saved")
@@ -70,7 +71,9 @@ let menu = newMenu(@[MenuItem(label: "Saved")], selectedStyle = selected)
 ```
 
 `colorsOn()` tells you whether a compiled theme emits ANSI sequences. When
-colors are off, `paint` returns the input text unchanged.
+colors are off, `paint` returns the input text unchanged. `themeRevision`
+increments whenever `setTheme` installs a new palette, which is useful when
+widgets cache compiled styles.
 
 ## Compile a custom theme
 

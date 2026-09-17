@@ -24,7 +24,9 @@ preserve the normal screen and shell scrollback.
 ## Choose capabilities
 
 `TerminalCapabilities` controls which optional terminal protocols nimterm
-requests:
+requests. On POSIX and Windows, `detectTerminalCapabilities()` reads the
+environment and returns a sensible default. Pass an explicit value when you
+want to override that detection:
 
 ```nim
 let capabilities = TerminalCapabilities(
@@ -70,7 +72,9 @@ the cursor. Always pair a successful `init` with `shutdown`, including when a
 custom loop raises an exception.
 
 For temporary shell interaction, `suspendTerminal()` shuts down the active
-terminal state and `resumeTerminal()` initializes it again.
+terminal state and `resumeTerminal()` initializes it again. Use
+`copyToClipboard` from `nimterm/term` when an action should place text on the
+system clipboard, as transcript copy actions do on supported platforms.
 
 ## Use platform-specific constructors
 

@@ -56,8 +56,8 @@ custom widgets, a host-owned loop, or deterministic rendering tests.
 
 - Layout primitives: `Size`, `Rect`, `Constraints`, `Column`, and `Stack`.
 - Built-in widgets: text, Markdown, panels, cards, menus, questions, inputs,
-  diffs, and transcripts.
-- ANSI-aware text width, wrapping, slicing, and Markdown rendering.
+  diffs, and transcripts with thinking, tool, and approval views.
+- ANSI-aware text width, `StyledLine` layout, wrapping, and Markdown rendering.
 - Semantic styles with ANSI 16, ANSI 256, and truecolor values.
 - Built-in dark and light themes plus JSON theme files.
 - POSIX and Windows platform backends with selectable terminal capabilities.

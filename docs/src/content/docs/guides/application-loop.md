@@ -79,7 +79,14 @@ dirty, unless you pass `force = true`.
 
 Keyboard events flush immediately. For streamed or background updates, set
 `minFrameIntervalMs` to limit presentation frequency, then call `flush` from
-your host loop when the app has no event.
+your host loop when the app has no event:
+
+```nim
+app.minFrameIntervalMs = 33  # about 30 fps
+```
+
+`pollIntervalMs` controls how often idle apps poll event sources that return
+`needsPolling = true`. The default is 16 milliseconds.
 
 ## Add an event source
 

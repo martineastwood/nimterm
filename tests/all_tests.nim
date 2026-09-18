@@ -564,6 +564,16 @@ suite "core canvas and app":
     check canvas.getCell(4, 0).glyph.int == ord('c')
     check attrReverse in canvas.getCell(4, 0).style.attributes
 
+  test "masked input keeps its value but hides every character":
+    let input = newInput()
+    input.masked = true
+    input.setText("sëcret")
+    var canvas = newCanvas(size(16, 1))
+    input.render(canvas, rect(0, 0, 16, 1))
+    check input.text == "sëcret"
+    check "sëcret" notin canvas.plainText
+    check canvas.lineText(0).startsWith("> ******")
+
   test "input preserves blank lines":
     let input = newInput()
     input.setText("a\n\nb")

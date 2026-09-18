@@ -37,7 +37,8 @@ type
 proc newQuestion*(prompt: string, options: seq[QuestionOption],
                   style = defaultStyle(), selectedStyle = defaultStyle(),
                   descriptionStyle = defaultStyle(), hintStyle = defaultStyle(),
-                  allowFreeText = true, freeTextLabel = "Other"): QuestionWidget =
+                  allowFreeText = true, freeTextLabel = "Other",
+                  secret = false): QuestionWidget =
   let cursorStyle = style.withAttribute(attrReverse)
   result = QuestionWidget(prompt: prompt, options: options,
     selected: if options.len > 0: 0 else: (if allowFreeText: 0 else: -1),
@@ -45,6 +46,7 @@ proc newQuestion*(prompt: string, options: seq[QuestionOption],
     selectedStyle: selectedStyle, descriptionStyle: descriptionStyle,
     hintStyle: hintStyle, freeText: newInput(prefix = "  > ", style = style,
       cursorStyle = cursorStyle, cursorBarStyle = cursorStyle))
+  result.freeText.masked = secret
 
 method focusable*(widget: QuestionWidget): bool = not widget.resolved
 method modal*(widget: QuestionWidget): bool = not widget.resolved

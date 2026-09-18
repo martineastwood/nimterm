@@ -1,6 +1,7 @@
 ## Editable text input widget with UTF-8-safe cursor movement.
 
 from std/unicode import Rune, fastRuneAt, isWhiteSpace
+import std/strutils
 import ../canvas
 import ../events
 import ../geometry
@@ -36,6 +37,7 @@ type
     cursorValid: bool
     undoStack: seq[tuple[text: string, cursor: int]]
     yankText*: string
+    masked*: bool
 
   WrappedInputLine = object
     text: string
@@ -427,28 +429,30 @@ method paint*(widget: InputWidget, canvas: var Canvas) =
     let prefixStyle = if line.firstSegment and line.sourceLine == 0:
       widget.prefixStyle else: widget.style
     let row = contentY + rowIndex
+    let displayText = if widget.masked: "*".repeat(line.text.displayWidth)
+                      else: line.text
     if lineIndex != cursorVisualLine:
       let prefixWidth = prefix.displayWidth
       canvas.writeText(contentX, row, prefix, prefixStyle, contentWidth)
-      canvas.writeText(contentX + prefixWidth, row, line.text, widget.style,
+      canvas.writeText(contentX + prefixWidth, row, displayText, widget.style,
         max(0, contentWidth - prefixWidth))
       continue
-    let cursorByte = byteAtColumn(line.text, cursorVisualColumn)
+    let cursorByte = byteAtColumn(displayText, cursorVisualColumn)
     let cursorX = contentX + prefix.displayWidth + cursorVisualColumn
     canvas.writeText(contentX, row, prefix, prefixStyle, contentWidth)
     canvas.writeText(contentX + prefix.displayWidth, row,
-      line.text[0 ..< cursorByte], widget.style,
+      displayText[0 ..< cursorByte], widget.style,
       max(0, contentWidth - prefix.displayWidth))
-    let cursorEnd = if cursorByte < line.text.len: nextPosition(line.text, cursorByte)
+    let cursorEnd = if cursorByte < displayText.len: nextPosition(displayText, cursorByte)
                     else: cursorByte
-    let cursorText = if cursorByte < line.text.len:
-      line.text[cursorByte ..< cursorEnd]
+    let cursorText = if cursorByte < displayText.len:
+      displayText[cursorByte ..< cursorEnd]
     else:
       "▌"
-    let cursorPaintStyle = if cursorByte < line.text.len: widget.cursorStyle
+    let cursorPaintStyle = if cursorByte < displayText.len: widget.cursorStyle
                            else: widget.cursorBarStyle
     let cursorWidth = max(1, cursorText.displayWidth)
     canvas.writeText(cursorX, row, cursorText, cursorPaintStyle, cursorWidth)
-    if cursorEnd < line.text.len:
-      canvas.writeText(cursorX + cursorWidth, row, line.text[cursorEnd .. ^1],
+    if cursorEnd < displayText.len:
+      canvas.writeText(cursorX + cursorWidth, row, displayText[cursorEnd .. ^1],
         widget.style, max(0, contentX + contentWidth - cursorX - cursorWidth))

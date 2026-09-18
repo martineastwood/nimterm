@@ -7,7 +7,6 @@ import ./events
 import ./frame
 import ./geometry
 import ./input
-import ./keys
 import ./term
 
 export frame

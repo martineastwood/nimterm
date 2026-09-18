@@ -134,6 +134,11 @@ proc terminalOutputIsInteractive*(): bool =
 proc terminalIsInteractive*(): bool =
   terminalInputIsInteractive() and terminalOutputIsInteractive()
 
+proc clearNonBlockingStdio*() =
+  ## POSIX pane managers can leave the terminal non-blocking; Windows console
+  ## handles have no such flag, so this is a no-op here.
+  discard
+
 proc inputPending*(timeoutMs: int): bool =
   ## The Windows backend performs the timed wait because it also has to wake
   ## for application events. This proc intentionally only probes input.

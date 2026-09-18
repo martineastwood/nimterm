@@ -85,3 +85,14 @@ proc terminalInputIsInteractive*(): bool = stdin.isatty
 proc terminalOutputIsInteractive*(): bool = stdout.isatty
 proc terminalIsInteractive*(): bool =
   terminalInputIsInteractive() and terminalOutputIsInteractive()
+
+proc clearNonBlockingStdio*() =
+  ## Pane managers (e.g. herdr) can leave the terminal non-blocking; stdio
+  ## then fails with EAGAIN instead of blocking, which crashes any TUI write
+  ## or read that races the host's drain. TUIs need a blocking terminal, so
+  ## clear the flag on every TTY stdio descriptor. Pipes are left alone.
+  for fd in [cint(STDIN_FILENO), cint(STDOUT_FILENO), cint(STDERR_FILENO)]:
+    if posix.isatty(fd) != 0:
+      let flags = fcntl(fd, F_GETFL, 0)
+      if flags >= 0:
+        discard fcntl(fd, F_SETFL, flags and not O_NONBLOCK)
